@@ -43,3 +43,13 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+
+# Student foundation
+/generated/
+/playwright-report/
+/test-results/
+/.next-student/
+!.env.example
+
+# Private uploads, model cache and database backups
+/.local/

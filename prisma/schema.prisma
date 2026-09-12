@@ -1,0 +1,238 @@
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+}
+datasource db {
+  provider = "postgresql"
+}
+enum AssignmentStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+}
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+enum ExplanationDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+model User {
+  id String @id
+  name String
+  email String @unique
+  emailVerified Boolean @default(false)
+  image String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sessions Session[]
+  accounts Account[]
+  profile Profile?
+  courses Course[]
+  assignments Assignment[]
+  exams Exam[]
+  memories UserMemory[]
+  documents Document[]
+  documentChunks DocumentChunk[]
+  documentPages DocumentPage[]
+}
+model Session {
+  id String @id
+  token String @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+model Account {
+  id String @id
+  accountId String
+  providerId String
+  userId String
+  password String?
+  accessToken String?
+  refreshToken String?
+  idToken String?
+  accessTokenExpiresAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+model Verification {
+  id String @id
+  identifier String
+  value String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([identifier])
+}
+model RateLimit {
+  id String @id
+  key String @unique
+  count Int
+  lastRequest BigInt
+}
+model Profile {
+  id String @id @default(cuid())
+  userId String @unique
+  school String
+  program String
+  currentYear Int
+  semester String
+  academicGoal String
+  studySessionMinutes Int
+  explanationDifficulty ExplanationDifficulty
+  timezone String @default("UTC")
+  onboardedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model Course {
+  id String @id @default(cuid())
+  userId String
+  courseCode String
+  courseName String
+  professor String?
+  semester String
+  description String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments Assignment[]
+  exams Exam[]
+  documents Document[]
+  @@unique([id, userId])
+  @@index([userId, semester])
+}
+model Assignment {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  description String?
+  dueDate DateTime
+  status AssignmentStatus @default(TODO)
+  priority Priority @default(MEDIUM)
+  estimatedHours Float @default(1)
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
+  @@index([userId, status, dueDate])
+  @@index([courseId, userId])
+}
+model Exam {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  examDate DateTime
+  topics String[]
+  notes String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
+  @@index([userId, examDate])
+  @@index([courseId, userId])
+}
+model UserMemory {
+  id String @id @default(cuid())
+  userId String
+  key String
+  value String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, key])
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+model Document {
+  id String @id @default(cuid())
+  userId String
+  courseId String?
+  title String
+  originalFileName String
+  fileType String
+  fileSize Int
+  storageKey String @unique
+  processingStatus DocumentStatus @default(UPLOADED)
+  processingError String?
+  pageCount Int?
+  embeddingModel String?
+  uploadedAt DateTime?
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  attempts Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course? @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
+  chunks DocumentChunk[]
+  pages DocumentPage[]
+  @@unique([id, userId])
+  @@index([userId, courseId, createdAt])
+  @@index([processingStatus, leaseExpiresAt])
+}
+model DocumentChunk {
+  id String @id @default(cuid())
+  documentId String
+  userId String
+  courseId String?
+  chunkIndex Int
+  content String
+  pageNumber Int?
+  pageEnd Int?
+  tokenCount Int
+  embedding Unsupported("vector(384)")
+  embeddingModel String
+  metadata Json
+  createdAt DateTime @default(now())
+  document Document @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([documentId, chunkIndex])
+  @@index([userId, courseId])
+  @@index([documentId, userId])
+}
+model DocumentPage {
+  id String @id @default(cuid())
+  documentId String
+  userId String
+  pageNumber Int
+  content String
+  document Document @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([documentId, pageNumber])
+  @@index([userId, documentId])
+}
+// Survives document/course/account deletion so storage cleanup can be retried.
+model FileDeletion {
+  id String @id @default(uuid())
+  userId String
+  storageKey String @unique
+  attempts Int @default(0)
+  retryAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  @@index([retryAt])
+  @@index([userId])
+}

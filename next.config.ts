@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  outputFileTracingExcludes: { "/*": ["./.local/**/*", "./.env*"] },
+  serverExternalPackages: [
+    "@huggingface/transformers",
+    "onnxruntime-node",
+    "pdfjs-dist",
+  ],
 };
 
 export default nextConfig;

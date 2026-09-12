@@ -1,26 +1,21 @@
 import type { Metadata } from "next";
 import "./globals.css";
-
+import { Providers } from "@/features/student/components/providers";
 export const metadata: Metadata = {
-  title: "CodeChoiceAI · 코드 리뷰",
-  description: "코드 가독성, 유지보수성, 시간 복잡도와 개선 방향을 분석하세요.",
-  other: {
-    "codex-preview": "development",
-  },
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
+  title: { default: "Student Agency", template: "%s · Student Agency" },
+  description:
+    "Your semester, in one place. Courses, deadlines and academic priorities.",
 };
-
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html lang="ko">
-      <body className="antialiased">{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
