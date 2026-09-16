@@ -1,16 +1,24 @@
 import "server-only";
-import { z } from "zod";
 import { db } from "@/server/db/client";
 import { NotFoundError } from "@/server/services/academic";
 import { retrieveAcademicContext } from "@/server/documents/retrieval";
+import { getLearningOverview } from "@/server/learning";
+import { retrieveRelevantMemories } from "@/server/memory";
+import type {
+  LearningTopicSummary,
+  RecommendedPracticeTopic,
+} from "@/server/learning/types";
 import type {
   AssignmentContext,
   CourseContext,
   CourseReference,
   DocumentContext,
   ExamContext,
+  LearningContext,
+  LearningTopicContext,
   MemoryContext,
   ProfileContext,
+  RecommendedLearningTopicContext,
 } from "./types";
 import type { SelectedContext } from "./validation";
 
@@ -18,6 +26,9 @@ export type CategoryInput = {
   userId: string;
   input: SelectedContext;
   now: Date;
+  selectedAssignment?: Awaited<ReturnType<typeof import("../services/academic").getAssignment>>;
+  semester?: string;
+  examTopicNames?: string[];
   clip: (text: string, max: number) => string;
 };
 const courseSelect = { id: true, courseCode: true, courseName: true } as const;
@@ -46,6 +57,7 @@ export async function profileContext({
       academicGoal: true,
       explanationDifficulty: true,
       studySessionMinutes: true,
+      timezone: true,
       user: { select: { name: true } },
     },
   });
@@ -59,6 +71,7 @@ export async function profileContext({
     academicGoal: clip(row.academicGoal, 500),
     explanationDifficulty: row.explanationDifficulty,
     studySessionMinutes: row.studySessionMinutes,
+    timezone: clip(row.timezone, 80),
   };
 }
 export async function courseContext({
@@ -89,15 +102,27 @@ export async function assignmentContext({
   input,
   now,
   clip,
+  semester,
+  selectedAssignment,
 }: CategoryInput): Promise<AssignmentContext[]> {
+  if (selectedAssignment) {
+    const course = await db().course.findUnique({ where: { id_userId: { id: selectedAssignment.courseId, userId } }, select: courseSelect });
+    if (!course) throw new NotFoundError();
+    return [{ id: selectedAssignment.id, title: selectedAssignment.title, description: selectedAssignment.description,
+      updatedAt: selectedAssignment.updatedAt.toISOString(), dueDate: selectedAssignment.dueDate.toISOString(),
+      status: selectedAssignment.status, priority: selectedAssignment.priority, estimatedHours: selectedAssignment.estimatedHours,
+      overdue: selectedAssignment.status !== "COMPLETED" && selectedAssignment.dueDate < now, course: reference(course, clip) }];
+  }
   const rows = await db().assignment.findMany({
     where: {
       userId,
-      course: { userId },
+      course: { userId, ...(semester ? { semester } : {}) },
       ...(input.courseId ? { courseId: input.courseId } : {}),
       status: { not: "COMPLETED" },
       dueDate: {
-        gte: new Date(now.getTime() - 30 * 86400000),
+        ...(!input.options.academicOverview
+          ? { gte: new Date(now.getTime() - 30 * 86400000) }
+          : {}),
         lte: new Date(
           now.getTime() + input.options.deadlineWindowDays * 86400000,
         ),
@@ -131,17 +156,19 @@ export async function examContext({
   input,
   now,
   clip,
+  semester,
 }: CategoryInput): Promise<ExamContext[]> {
   const rows = await db().exam.findMany({
     where: {
       userId,
-      course: { userId },
+      ...(input.examId ? { id: input.examId } : {}),
+      course: { userId, ...(semester ? { semester } : {}) },
       ...(input.courseId ? { courseId: input.courseId } : {}),
       examDate: {
         gte: now,
-        lte: new Date(
+        ...(!input.examId ? { lte: new Date(
           now.getTime() + input.options.deadlineWindowDays * 86400000,
-        ),
+        ) } : {}),
       },
     },
     orderBy: [{ examDate: "asc" }, { id: "asc" }],
@@ -158,7 +185,8 @@ export async function examContext({
     id: row.id,
     title: clip(row.title, 200),
     examDate: row.examDate.toISOString(),
-    topics: row.topics.slice(0, 10).map((topic) => clip(topic, 100)),
+    topics: row.topics.slice(0, 10).map((topic) => clip(topic, 120)),
+    ...(input.options.academicOverview ? { topicCount: row.topics.length } : {}),
     daysRemaining: Math.ceil(
       (row.examDate.getTime() - now.getTime()) / 86400000,
     ),
@@ -170,12 +198,17 @@ export async function documentContext({
   input,
   clip,
 }: CategoryInput): Promise<DocumentContext[]> {
-  const rows = await retrieveAcademicContext(userId, {
+  const selected = input.options.selectedDocumentCoverage ? input.documentIds : undefined;
+  const retrieve = (documentIds: string[] | undefined, maxResults: number) => retrieveAcademicContext(userId, {
     query: input.request,
     ...(input.courseId ? { courseId: input.courseId } : {}),
-    ...(input.documentIds ? { documentIds: input.documentIds } : {}),
-    maxResults: input.options.limits.documents,
+    ...(documentIds ? { documentIds } : {}), maxResults,
   });
+  // Reuse the existing authorized RAG service, reserving slots so one large
+  // document cannot crowd out the other explicitly selected lecture materials.
+  const rows = selected?.length
+    ? (await Promise.all(selected.map((id, i) => retrieve([id], Math.floor(input.options.limits.documents / selected.length) + (i < input.options.limits.documents % selected.length ? 1 : 0))))).flat()
+    : await retrieve(input.documentIds, input.options.limits.documents);
   return rows.map((row) => ({
     content: clip(row.content, 3500),
     documentTitle: clip(row.documentTitle, 200),
@@ -188,38 +221,99 @@ export async function documentContext({
     similarityScore: row.similarityScore,
   }));
 }
-// UserMemory has no sensitivity flag. Accept only bounded, known preference values.
-const memoryValues = {
-  explanationStyle: z.enum(["concise", "detailed", "step-by-step", "socratic"]),
-  studySessionMinutes: z
-    .string()
-    .regex(/^\d{1,3}$/)
-    .transform(Number)
-    .pipe(z.number().int().min(15).max(180)),
-  academicGoal: z.enum([
-    "understand_concepts",
-    "prepare_for_exams",
-    "improve_grades",
-  ]),
-};
+
+function learningTopic(
+  item: LearningTopicSummary,
+  clip: CategoryInput["clip"],
+): LearningTopicContext {
+  return {
+    topicId: item.id,
+    topic: clip(item.topic, 160),
+    course: {
+      id: item.courseId,
+      courseCode: clip(item.courseCode, 40),
+      courseName: clip(item.courseName, 200),
+    },
+    mastery: item.mastery,
+    confidence: item.confidence,
+    recentAccuracy: item.recentAccuracy,
+    questionsAttempted: item.questionsAttempted,
+    practiceSessions: item.practiceSessions,
+    status: item.status,
+    evidence: item.evidence,
+    trend: item.trend,
+    lastPracticedAt: item.lastPracticedAt,
+  };
+}
+
+function recommendedLearningTopic(
+  item: RecommendedPracticeTopic,
+  clip: CategoryInput["clip"],
+): RecommendedLearningTopicContext {
+  return {
+    ...learningTopic(item, clip),
+    reasons: [...item.reasons],
+  };
+}
+
+export async function learningContext({
+  userId,
+  input,
+  now,
+  clip,
+  semester,
+  examTopicNames,
+}: CategoryInput): Promise<LearningContext | undefined> {
+  const overview = await getLearningOverview({
+    userId,
+    ...(input.courseId ? { courseId: input.courseId } : {}),
+    limit: input.options.limits.learning,
+    now,
+    ...(semester ? { semester } : {}),
+    ...(examTopicNames ? { examTopicNames } : {}),
+  });
+  if (!overview) return undefined;
+  const result: LearningContext = {
+    weakTopics: overview.weakTopics.map((item) => learningTopic(item, clip)),
+    strongTopics: overview.strongTopics.map((item) =>
+      learningTopic(item, clip),
+    ),
+    recommendedTopics: overview.recommendedTopics.map((item) =>
+      recommendedLearningTopic(item, clip),
+    ),
+    ...(overview.examTopics ? {
+      examTopics: overview.examTopics.map((item) => learningTopic(item, clip)),
+    } : {}),
+  };
+  return Object.values(result).some((items) => items.length)
+    ? result
+    : undefined;
+}
 export async function memoryContext({
   userId,
   input,
+  now,
+  clip,
 }: CategoryInput): Promise<MemoryContext[]> {
-  const keys = input.options.memoryKeys;
-  if (!keys.length) return [];
-  const rows = await db().userMemory.findMany({
-    where: { userId, key: { in: keys } },
-    select: { key: true, value: true },
-    orderBy: { key: "asc" },
-    take: 3,
+  const rows = await retrieveRelevantMemories({
+    userId,
+    request: input.request,
+    categories: input.options.memoryCategories,
+    keys: input.options.memoryKeys,
+    limit: input.options.limits.memories,
+    now,
   });
-  const result: MemoryContext[] = [];
-  for (const row of rows) {
-    const key = keys.find((key) => key === row.key);
-    if (!key) continue;
-    const parsed = memoryValues[key].safeParse(row.value);
-    if (parsed.success) result.push({ key, value: parsed.data });
-  }
-  return result.slice(0, input.options.limits.memories);
+  return rows.map((row) => ({
+    id: row.id,
+    category: row.category,
+    key: clip(row.key, 80),
+    value:
+      typeof row.value === "string" ? clip(row.value, 500) : row.value,
+    sourceType: row.sourceType,
+    confidence: row.confidence,
+    importance: row.importance,
+    stale: row.stale,
+    lastUpdated: row.lastObservedAt,
+    explanation: clip(row.explanation, 300),
+  }));
 }

@@ -51,7 +51,9 @@ export function DeleteItem({
     <AlertDialog
       open={open}
       onOpenChange={(value) => {
-        if (!busy) setOpen(value);
+        // Prevent a second open action while deleting, but always allow the
+        // controlled dialog to close after a successful mutation.
+        if (!value || !busy) setOpen(value);
       }}
     >
       <AlertDialogTrigger asChild>

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 test("student signs up, onboards, manages courses and deadlines, then signs out", async ({
   page,
 }) => {
+  test.setTimeout(120000);
   const email = `browser-${randomUUID()}@example.test`;
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   try {

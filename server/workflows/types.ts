@@ -1,0 +1,116 @@
+import type { AgentId } from "../agents/types";
+import type { LearningTopicContext, ContextCategory, ExamContext } from "../context/types";
+import type { StudyAvailability } from "../agents/study-planner/types";
+
+import type { LectureState, LectureStudySummary, LectureStudyMode, LectureDifficulty } from "./lecture-policy";
+import type { RecoveryState, RecoveryResult } from "./recovery-policy";
+import type { AssignmentState, AssignmentSupportResult } from "./assignment-policy";
+import type { CareerPreparationState, CareerPreparationResult } from "./career-policy";
+
+export const WORKFLOW_IDS = ["exam-preparation", "weak-topic-recovery", "lecture-study", "assignment-support", "career-preparation"] as const;
+export type WorkflowId = typeof WORKFLOW_IDS[number];
+export type WorkflowWaitingInput = { kind: "quiz" | "student-work" | "career-data"; referenceId: string };
+export type WorkflowStatus = "pending" | "running" | "waiting-for-input" | "completed" | "failed" | "cancelled";
+export type FailurePolicy = "fail-workflow" | "skip-step" | "continue-with-warning";
+export type WorkflowInput = {
+  workflowId: WorkflowId;
+  goal: string;
+  examId?: string;
+  assignmentId?: string;
+  userWork?: string;
+  specificQuestion?: string;
+  targetRole?: string;
+  targetIndustry?: string;
+  targetCompanies?: string[];
+  applicationTimeline?: string;
+  resumeData?: string;
+  projectIds?: string[];
+  availableWeeklyMinutes?: number;
+  availableWeeklyHours?: number;
+  courseId?: string;
+  studyPlanId?: string;
+  quizId?: string;
+  documentIds?: string[];
+  availability?: StudyAvailability[];
+  topicId?: string;
+  topicName?: string;
+  review?: boolean;
+  documentId?: string;
+  topicFocus?: string;
+  difficulty?: LectureDifficulty;
+  mode?: LectureStudyMode;
+  availableMinutes?: number;
+};
+export type WorkflowContext = {
+  goal: string;
+  courseId: string;
+  timezone?: string;
+  exam?: ExamContext;
+  recovery?: RecoveryState;
+  lecture?: LectureState;
+  assignment?: AssignmentState;
+  careerPreparation?: CareerPreparationState;
+  waitingFor?: WorkflowWaitingInput | null;
+  availability?: StudyAvailability[];
+  documentIds?: string[];
+  priorities: { reason: string; score: number }[];
+  topics: LearningTopicContext[];
+  studyPlanId: string | null;
+  planCurrent: boolean;
+  quizId: string | null;
+  quizCurrent: boolean;
+  quizMode: "diagnostic" | "practice";
+  tutorTopic: string | null;
+  targetTopics: string[];
+  previousStepSummaries: { stepId: string; summary: string }[];
+};
+export type StepInput = { request: string; topic?: string };
+export type StepOutput = {
+  summary: string;
+  patch?: Partial<Pick<WorkflowContext, "priorities" | "topics" | "studyPlanId" | "planCurrent" | "quizId" | "quizCurrent" | "quizMode" | "tutorTopic" | "targetTopics" | "recovery" | "lecture" | "assignment" | "careerPreparation">>;
+  data?: Record<string, unknown>;
+  waitForInput?: WorkflowWaitingInput;
+};
+export type WorkflowStep = {
+  id: string;
+  /** Built-in code steps do not call an AI agent. */
+  agentId: AgentId | "deterministic";
+  purpose: string;
+  outputKey: string;
+  input: (context: Readonly<WorkflowContext>) => StepInput;
+  condition?: (context: Readonly<WorkflowContext>) => { run: boolean; reason: string };
+  failurePolicy?: FailurePolicy;
+  invalidates?: readonly ContextCategory[];
+};
+export type WorkflowDefinition = {
+  id: WorkflowId;
+  name: string;
+  description: string;
+  intents: readonly string[];
+  steps: readonly WorkflowStep[];
+  maxSteps: number;
+  maxAgentCalls: number;
+  agentCallLimits?: Partial<Record<AgentId, number>>;
+  maxDurationMs: number;
+  /** Larger structured study notes may need more than the default 14,000 chars. */
+  maxOutputCharacters?: number;
+  maxRetries: number;
+  failurePolicy: FailurePolicy;
+};
+export type WorkflowResult = {
+  runId: string;
+  workflowId: WorkflowId;
+  status: WorkflowStatus;
+  summary: string;
+  completedSteps: string[];
+  steps: { stepId: string; agentId: string; status: string; attempts: number; inputSummary: string | null; outputSummary: string | null; errorCode: string | null }[];
+  outputs: Record<string, unknown>;
+  warnings: string[];
+  errorCode: string | null;
+  recommendedNextAction: string;
+  waitingFor?: WorkflowWaitingInput | null;
+  assignmentSupport?: AssignmentSupportResult;
+  careerPreparation?: CareerPreparationResult;
+  recovery?: RecoveryResult;
+  lectureStudy?: { mode: LectureStudyMode; estimatedEffort: LectureState["effort"]; coverage: string; summary: LectureStudySummary | null };
+};

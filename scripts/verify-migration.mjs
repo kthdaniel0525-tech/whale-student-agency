@@ -20,8 +20,10 @@ try {
       encoding: "utf8",
     },
   );
-  if (result.status !== 0)
-    throw new Error("Migration to the fresh database failed.");
+  if (result.status !== 0) {
+    const details = (result.stderr || result.stdout || "Unknown migration error").trim();
+    throw new Error(`Migration to the fresh database failed.\n${details}`);
+  }
   const verify = new Pool({ connectionString: testUrl.toString() });
   try {
     const tables = await verify.query(
@@ -34,6 +36,7 @@ try {
       "Assignment",
       "Exam",
       "UserMemory",
+      "MemoryObservation",
       "Session",
       "Account",
       "Verification",
@@ -42,6 +45,22 @@ try {
       "DocumentChunk",
       "DocumentPage",
       "FileDeletion",
+      "Quiz",
+      "QuizQuestion",
+      "LearningTopic",
+      "QuizQuestionTopic",
+      "QuizAttempt",
+      "QuestionAttempt",
+      "LearningProgress",
+      "StudyPlan",
+      "StudyTask",
+      "CareerProfile",
+      "Project",
+      "Skill",
+      "WorkflowRun",
+      "WorkflowStepRun",
+      "CareerPlan",
+      "CareerTask",
     ]) {
       if (!tables.rows.some((row) => row.tablename === table))
         throw new Error(`Missing ${table} table.`);
@@ -49,8 +68,25 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 2)
+    if (migration.rows[0].count !== 11)
       throw new Error("Unexpected applied migration count.");
+    const memoryColumns = await verify.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='UserMemory'
+       AND column_name IN ('category','sourceType','confidence','importance','status','firstObservedAt','lastObservedAt','embedding','embeddingModel','embeddingValueHash')`,
+    );
+    if (memoryColumns.rows.length !== 10)
+      throw new Error("Missing memory personalization columns.");
+    const waiting = await verify.query(
+      `SELECT enumlabel FROM pg_enum JOIN pg_type ON pg_type.oid=enumtypid
+       WHERE typname='WorkflowRunStatus' AND enumlabel='WAITING_FOR_INPUT'`,
+    );
+    const budget = await verify.query(
+      `SELECT column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='WorkflowRun' AND column_name='activeDurationMs' AND is_nullable='NO'`,
+    );
+    if (waiting.rows.length !== 1 || budget.rows[0]?.column_default !== "0")
+      throw new Error("Missing workflow wait state or persisted execution budget.");
     const vector = await verify.query(
       "SELECT extversion FROM pg_extension WHERE extname='vector'",
     );
@@ -62,7 +98,7 @@ try {
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
     console.log(
-      "Fresh PostgreSQL migration verified: 14 tables, 2 migrations, pgvector 0.8.2 and file-deletion trigger.",
+      "Fresh PostgreSQL migration verified: 31 tables, 11 migrations, memory constraints and semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
     );
   } finally {
     await verify.end();

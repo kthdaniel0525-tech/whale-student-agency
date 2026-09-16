@@ -9,6 +9,7 @@ import {
 import { documentConfig, DocumentError } from "../config";
 import { assertCourse, getDocument } from "../service";
 import { retrievalSchema } from "@/features/documents/validation/schemas";
+import { recordRagCall } from "@/server/observability/request-metrics";
 export type RetrievedChunk = {
   id: string;
   content: string;
@@ -26,6 +27,7 @@ export async function retrieveAcademicContext(
   request: unknown,
   provider: EmbeddingProvider = embeddingProvider,
 ): Promise<RetrievedChunk[]> {
+  recordRagCall();
   const input = retrievalSchema.parse(request);
   if (input.courseId) await assertCourse(userId, input.courseId);
   if (input.documentIds)

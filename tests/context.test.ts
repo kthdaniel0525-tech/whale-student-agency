@@ -185,6 +185,7 @@ describe.sequential(
         academicGoal: "Understand proofs",
         studySessionMinutes: 45,
         explanationDifficulty: "INTERMEDIATE",
+        timezone: "UTC",
       });
       const serialized = JSON.stringify(context);
       for (const value of [a.id, a.email, "session", "password", "storageKey"])
@@ -328,7 +329,10 @@ describe.sequential(
         { request: "Preferences", options: { memories: true } },
         a.headers,
       );
-      expect(none.memories).toEqual([]);
+      expect(none.memories?.map((memory) => memory.key).sort()).toEqual([
+        "explanationStyle",
+        "studySessionMinutes",
+      ]);
       const context = await buildUserContext(
         {
           request: "Use my study preferences",
@@ -343,10 +347,10 @@ describe.sequential(
         },
         a.headers,
       );
-      expect(context.memories).toEqual([
-        { key: "explanationStyle", value: "concise" },
-        { key: "studySessionMinutes", value: 45 },
-      ]);
+      expect(context.memories?.map(({ key, value, sourceType, confidence }) => ({ key, value, sourceType, confidence })).sort((a, b) => a.key.localeCompare(b.key))).toEqual([
+        { key: "explanationStyle", value: "concise", sourceType: "explicit", confidence: 95 },
+        { key: "studySessionMinutes", value: 45, sourceType: "explicit", confidence: 95 },
+      ].sort((a, b) => a.key.localeCompare(b.key)));
       expect(JSON.stringify(context)).not.toContain("SECRET");
     });
     it("reports absent learning data instead of inventing progress", async () => {

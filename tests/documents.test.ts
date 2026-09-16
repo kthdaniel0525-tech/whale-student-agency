@@ -262,6 +262,17 @@ describe.sequential(
       });
       expect(result.results[0].content).toContain("inductive hypothesis");
       expect(result.results[0].similarityScore).toBeGreaterThanOrEqual(0.35);
+      for (const query of [
+        "inductive hypothesis",
+        "Why are falling dominoes a useful mental model for this proof method?",
+      ]) {
+        const grounded = await search(a, { query, courseId: math });
+        expect(grounded.results[0]).toMatchObject({
+          documentId: pdfId,
+          documentTitle: "lecture.pdf",
+          courseId: math,
+        });
+      }
       expect(
         (
           await search(a, {

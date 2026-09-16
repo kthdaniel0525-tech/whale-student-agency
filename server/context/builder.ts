@@ -1,17 +1,21 @@
 import "server-only";
 import { auth } from "@/server/auth/config";
 import { assertCourse, getDocument } from "@/server/documents/service";
-import { NotFoundError } from "@/server/services/academic";
+import { getAssignment, getExam, NotFoundError } from "@/server/services/academic";
+import type { ContextReadCache } from "./cache";
 import {
   assignmentContext,
   courseContext,
   documentContext,
   examContext,
+  learningContext,
   memoryContext,
   profileContext,
   type CategoryInput,
 } from "./categories";
 import { contextSchema, ContextError } from "./validation";
+import { academicOverviewContext } from "./academic-overview";
+import { careerContext } from "./career";
 import type {
   ContextCategory,
   ContextData,
@@ -22,6 +26,8 @@ import type {
 const categories: ContextCategory[] = [
   "profile",
   "course",
+  "career",
+  "academicOverview",
   "assignments",
   "exams",
   "documents",
@@ -33,6 +39,7 @@ const categories: ContextCategory[] = [
 export async function buildUserContext(
   request: ContextRequest,
   requestHeaders: Headers,
+  cache?: ContextReadCache,
 ): Promise<UserContext> {
   const session = await auth().api.getSession({
     headers: requestHeaders,
@@ -43,6 +50,18 @@ export async function buildUserContext(
   if (!parsed.success) throw new ContextError("INVALID_REQUEST");
   const input = parsed.data;
   const userId = session.user.id;
+  let selectedExamTopics: string[] | undefined;
+  const selectedAssignment = input.assignmentId ? await getAssignment(userId, input.assignmentId) : undefined;
+  if (selectedAssignment) {
+    if (input.courseId && selectedAssignment.courseId !== input.courseId) throw new NotFoundError();
+    input.courseId = selectedAssignment.courseId;
+  }
+  if (input.examId) {
+    const exam = await getExam(userId, input.examId);
+    if (input.courseId && exam.courseId !== input.courseId) throw new NotFoundError();
+    input.courseId = exam.courseId;
+    selectedExamTopics = exam.topics.slice(0, 100);
+  }
   // Scope is authorized even when its corresponding output category is disabled.
   if (input.courseId) await assertCourse(userId, input.courseId);
   if (input.documentIds)
@@ -60,6 +79,12 @@ export async function buildUserContext(
     userId,
     input,
     now,
+    selectedAssignment,
+    ...(input.options.academicOverview && !input.courseId && data.profile?.semester
+      ? { semester: data.profile.semester } : {}),
+    ...(input.options.academicOverview || selectedExamTopics ? {
+      examTopicNames: selectedExamTopics ?? [...new Set(data.exams?.flatMap((exam) => exam.topics) ?? [])].slice(0, 100),
+    } : {}),
     clip: (value, max) => {
       if (value.length <= max) return value;
       truncated.add(category);
@@ -68,6 +93,10 @@ export async function buildUserContext(
   });
   // Only selected loaders execute. Adding a category does not alter the other loaders.
   const loaders: Record<ContextCategory, () => Promise<void>> = {
+    career: async () => {
+      data.career = await careerContext(args("career"));
+      if (data.career.limitations.length) truncated.add("career");
+    },
     profile: async () => {
       data.profile = await profileContext(args("profile"));
       if (!data.profile) unavailable.push("profile");
@@ -89,10 +118,43 @@ export async function buildUserContext(
       data.memories = await memoryContext(args("memories"));
     },
     learning: async () => {
-      unavailable.push("learning");
+      data.learning = await learningContext(args("learning"));
+      if (!data.learning) unavailable.push("learning");
+    },
+    academicOverview: async () => {
+      data.academicOverview = await academicOverviewContext(args("academicOverview"), data);
+      // Readiness has consumed exact exam-topic evidence; avoid duplicating it in prompts.
+      if (data.learning) delete data.learning.examTopics;
     },
   };
-  await Promise.all(requested.map((category) => loaders[category]()));
+  if (cache) {
+    for (const category of categories) {
+      const load = loaders[category];
+      loaders[category] = async () => {
+        const result = await cache.read(category, args(category), async () => {
+          await load();
+          return { value: data[category], truncated: truncated.has(category), unavailable: unavailable.includes(category) };
+        });
+        Object.assign(data, { [category]: result.value });
+        if (result.truncated) truncated.add(category);
+        if (result.unavailable && !unavailable.includes(category)) unavailable.push(category);
+      };
+    }
+  }
+  if (input.options.academicOverview) {
+    // Profile establishes semester/timezone; deadlines establish exact readiness topics.
+    await loaders.profile();
+    const prerequisites = new Set([...requested, "assignments", "exams"] as ContextCategory[]);
+    await Promise.all([...prerequisites].filter((category) => !["profile", "learning", "academicOverview"].includes(category)).map((category) => loaders[category]()));
+    await loaders.learning();
+    await loaders.academicOverview();
+    if (data.learning) delete data.learning.examTopics;
+    for (const category of ["profile", "assignments", "exams", "learning"] as const) {
+      if (!input.options[category]) delete data[category];
+    }
+  } else {
+    await Promise.all(requested.map((category) => loaders[category]()));
+  }
   const size = () => JSON.stringify(data).length;
   // Deterministic budget: keep profile/course first, then nearest deadlines and highest-ranked passages.
   for (const category of [...categories].reverse()) {
@@ -116,7 +178,7 @@ export async function buildUserContext(
       generatedAt: now.toISOString(),
       requestedCategories: requested,
       unavailableCategories: categories.filter((category) =>
-        unavailable.includes(category),
+        requested.includes(category) && unavailable.includes(category),
       ),
       truncatedCategories: categories.filter((category) =>
         truncated.has(category),
