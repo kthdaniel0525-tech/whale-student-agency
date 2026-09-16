@@ -815,6 +815,14 @@ describe.sequential("Study Planner replanning, study-now, and ownership", () => 
     const completed = await initial.boundary.service.updateTaskStatus(taskId, "completed", owner.headers);
     expect(completed.status).toBe("completed");
     expect(completed.days[0].sessions[0]).toMatchObject({ id: taskId, status: "completed" });
+    await expect(db().adaptiveOutcome.findFirst({
+      where: {
+        userId: owner.id,
+        agentId: "study-planner",
+        outcomeType: "study-task-completed",
+        evidenceKey: `study-task:${taskId}:completed`,
+      },
+    })).resolves.not.toBeNull();
   });
 
   it("protects plans and tasks from cross-user reads and writes", async () => {

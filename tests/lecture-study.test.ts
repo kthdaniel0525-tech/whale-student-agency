@@ -15,6 +15,7 @@ import { embeddingProvider } from "@/server/documents/embeddings";
 import * as retrieval from "@/server/documents/retrieval";
 import * as learning from "@/server/learning/service";
 import { buildUserContext } from "@/server/context/builder";
+import { createConversation, getConversation } from "@/server/conversations";
 const DAY = 86400000;
 const passage = "Mathematical Induction uses a Base Step P(1) and an Inductive Step. Assume the Inductive Hypothesis P(k), then prove P(k+1). Strong Induction assumes every preceding case. Study this lecture by explaining definitions, practicing proofs and checking the base case.";
 type Actor = { id: string; headers: Headers };
@@ -73,7 +74,7 @@ function boundary(options: { fail?: string; invalidCitation?: boolean; noFocus?:
     }, generateText() { throw new Error("The study workflow uses structured existing-agent execution."); }, streamText() { throw new Error("No streaming framework."); }, generateEmbedding() { throw new Error("Reuse real local RAG."); },
   };
   const getProvider = () => provider;
-  return { calls, requests, provider, service: new WorkflowService({ getProvider }), quiz: new QuizAgentService(createStudentAgentRegistry(), { getProvider }) };
+  return { calls, requests, provider, service: new WorkflowService({ getProvider, conversationEmbeddingProvider: null }), quiz: new QuizAgentService(createStudentAgentRegistry(), { getProvider }) };
 }
 async function answerAll(ai: ReturnType<typeof boundary>, run: WorkflowResult, correct = 99, user = owner) {
   expect(run.status, JSON.stringify(run)).toBe("waiting-for-input");
@@ -150,6 +151,33 @@ describe.sequential("Lecture Study with actual auth, selected RAG, agents, gradi
     expect(context.learning?.weakTopics.find((t) => t.topicId === f.topicId)?.mastery).toBe(current.mastery);
     expect(await db().workflowRun.count({ where: { userId: owner.id, workflowId: "weak-topic-recovery", context: { path: ["courseId"], equals: f.course.id } } })).toBe(0);
     expect(ai.calls).not.toContain("study_plan"); expect(ai.calls).not.toContain("academic_manager");
+  });
+  it("keeps conversation support across quiz waiting and resume while WorkflowRun remains authoritative", async () => {
+    const f = await fixture({ learning: true });
+    const conversation = await createConversation({ courseId: f.course.id }, owner.headers);
+    const ai = boundary();
+    const waiting = await ai.service.runWorkflow({
+      ...f.input,
+      mode: "quick-review",
+      conversationId: conversation.id,
+    }, owner.headers);
+    expect(waiting).toMatchObject({ status: "waiting-for-input", waitingFor: { kind: "quiz" } });
+    const waitingContext = await saved(waiting.runId);
+    expect(waitingContext).toMatchObject({
+      conversationId: conversation.id,
+      waitingFor: waiting.waitingFor,
+      quizId: waiting.waitingFor?.referenceId,
+    });
+    const quizAttemptId = await answerAll(ai, waiting);
+    const resumed = await new WorkflowService({
+      getProvider: () => ai.provider,
+      conversationEmbeddingProvider: null,
+    }).resumeWorkflow({ runId: waiting.runId, quizAttemptId }, owner.headers);
+    expect(resumed.status).toBe("completed");
+    const messages = (await getConversation(conversation.id, owner.headers, 100)).messages;
+    expect(messages.some((message) => message.agentId === "notes")).toBe(true);
+    expect(messages.some((message) => message.agentId === "quiz")).toBe(true);
+    expect(messages.filter((message) => message.role === "user").length).toBeGreaterThan(2);
   });
   it("never claims improvement from an unpracticed default mastery score", async () => {
     const f = await fixture(); const ai = boundary(); const run = await ai.service.runWorkflow({ ...f.input, mode: "quick-review" }, owner.headers);

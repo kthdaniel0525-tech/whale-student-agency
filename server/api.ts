@@ -5,6 +5,7 @@ import { auth } from "@/server/auth/config";
 import { db } from "@/server/db/client";
 import { getEnv } from "@/server/env";
 import { NotFoundError } from "@/server/services/academic";
+import { RecommendationError } from "@/server/recommendations";
 const noStore = { "Cache-Control": "private, no-store" };
 export class RequestError extends Error {
   constructor(
@@ -95,7 +96,8 @@ export async function api(
     if (
       error instanceof RequestError ||
       error instanceof DocumentError ||
-      error instanceof NotFoundError
+      error instanceof NotFoundError ||
+      error instanceof RecommendationError
     ) {
       return Response.json(
         { error: error.message },
@@ -103,13 +105,29 @@ export async function api(
           status:
             error instanceof RequestError || error instanceof DocumentError
               ? error.status
-              : 404,
+              : error instanceof RecommendationError
+                ? error.code === "UNAUTHENTICATED" ? 401
+                  : error.code === "NOT_FOUND" || error.code === "INVALID_TARGET" ? 404
+                    : error.code === "STORAGE_FAILURE" ? 503 : 400
+                : 404,
           headers: noStore,
         },
       );
     }
     const code =
       error instanceof Error && "code" in error ? error.code : undefined;
+    if (typeof code === "string") {
+      const status =
+        ["UNAUTHENTICATED", "AUTHENTICATION_FAILURE"].includes(code) ? 401
+          : ["NOT_FOUND", "RUN_NOT_FOUND", "QUIZ_NOT_FOUND", "PLAN_NOT_FOUND", "TASK_NOT_FOUND", "CONVERSATION_NOT_FOUND", "REFERENCE_NOT_FOUND"].includes(code) ? 404
+            : code === "RATE_LIMIT" ? 429
+              : ["PROVIDER_FAILURE", "STORAGE_FAILURE", "CONFIGURATION", "AUTHENTICATION", "INVALID_RESPONSE"].includes(code) ? 503
+                : 400;
+      return Response.json(
+        { error: error instanceof Error ? error.message : "The request could not be completed." },
+        { status, headers: noStore },
+      );
+    }
     if (code === "P2003" || code === "P2025")
       return Response.json(
         { error: "This item is no longer available. Refresh and try again." },

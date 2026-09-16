@@ -5,6 +5,7 @@ import type {
   DocumentContext,
   UserContext,
 } from "../context/types";
+import type { ConversationContext } from "../conversations";
 
 export const STUDENT_AGENT_IDS = [
   "academic-manager",
@@ -81,6 +82,8 @@ export interface AgentExecutionInput {
     readonly id: string;
     readonly turnId?: string;
   };
+  /** Server-built history; never accepted from the client execution request. */
+  readonly conversationContext?: ConversationContext;
 }
 
 export type AgentSource = Pick<
@@ -109,5 +112,14 @@ export interface AgentExecutionResult<
     readonly contextCategories?: readonly ContextCategory[];
     readonly contextCharacters?: number;
     readonly contextEstimatedTokens?: number;
+    readonly recentMessagesUsed?: number;
+    readonly historicalMessagesUsed?: number;
+    readonly summaryUsed?: boolean;
+    readonly estimatedConversationTokens?: number;
+    readonly compressionTriggered?: boolean;
+    readonly totalAssembledContextEstimatedTokens?: number;
+    readonly conversationId?: string;
+    readonly conversationTurnId?: string;
+    readonly adaptiveStrategyKey?: string;
   };
 }

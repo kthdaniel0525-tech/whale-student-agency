@@ -113,7 +113,7 @@ describe.sequential("Exam Preparation with existing agents and real owned persis
     expect(result.steps.find((s) => s.stepId === "diagnostic")).toMatchObject({ status: "skipped", attempts: 0 });
     expect(ai.calls).toEqual(["academic_manager", "study_plan", "tutor", "quiz_generation"]);
     expect(ai.structured.every((request) =>
-      request.messages.some((message) => message.content.includes("[PERSONALIZATION]")),
+      request.messages.some((message) => message.content.includes("[ADAPTATION]")),
     )).toBe(true);
     expect(executor).toHaveBeenCalledTimes(3);
     expect(await db().studyPlan.findFirst({ where: { id: result.outputs.studyPlanId as string, userId: owner.id } })).not.toBeNull();

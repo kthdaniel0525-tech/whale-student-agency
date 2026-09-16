@@ -8,7 +8,7 @@ import { normalizeTopicName } from "../learning/normalization";
 import { createStudentAgentRegistry, createStudentAgentService } from "../agents/student-service";
 import { StudyPlannerAgentService } from "../agents/study-planner/service";
 import { QuizAgentService } from "../agents/quiz/service";
-import type { AIProvider } from "../ai/types";
+import type { AIEmbeddingProvider, AIProvider } from "../ai/types";
 import type { AcademicManagerResponse } from "../agents/academic-manager/execution";
 import { AgentExecutor } from "../agents/executor";
 import { NOTES_INSTRUCTIONS } from "../agents/notes/instructions";
@@ -28,6 +28,7 @@ import { weakTopicRecovery, recoveryState } from "./weak-topic-recovery";
 import { RecoveryWorkflowAdapter, recoveryInputSchema, initialRecoveryContext, validateRecoveryAttempt } from "./recovery-service";
 import { examDecisions, examPreparation } from "./exam-preparation";
 import type { StepOutput, WorkflowContext, WorkflowInput } from "./types";
+import { appendConversationMessage, ConversationError, getConversationScope } from "../conversations";
 
 const id = z.string().min(1).max(100);
 function calendarDate(value: Date, timezone = "UTC") {
@@ -37,6 +38,7 @@ function calendarDate(value: Date, timezone = "UTC") {
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((s) => { const d = new Date(s + "T00:00:00Z"); return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s; });
 const examInputSchema = z.object({
   workflowId: z.literal("exam-preparation"), goal: z.string().trim().min(3).max(1000),
+  conversationId: id.optional(),
   examId: id.optional(), courseId: id.optional(), studyPlanId: id.optional(), quizId: id.optional(),
   documentIds: z.array(id).min(1).max(10).optional(),
   availability: z.array(z.object({ date, availableMinutes: z.number().int().min(0).max(720) }).strict()).min(1).max(91).refine((a) => new Set(a.map((d) => d.date)).size === a.length).optional(),
@@ -49,7 +51,10 @@ const planInclude = { tasks: { take: 201, orderBy: { date: "asc" as const }, inc
 
 /** Explicit user-initiated entry point; it never intercepts single-agent requests. */
 export class WorkflowService {
-  constructor(private readonly options: { getProvider?: () => AIProvider | Promise<AIProvider> } = {}) {}
+  constructor(private readonly options: {
+    getProvider?: () => AIProvider | Promise<AIProvider>;
+    conversationEmbeddingProvider?: AIEmbeddingProvider | null;
+  } = {}) {}
 
   private engine(cache = new ContextReadCache()) {
     const agents = createStudentAgentRegistry();
@@ -68,7 +73,8 @@ export class WorkflowService {
       if (context.recovery) return recovery.execute(step, input, context, headers);
       if (!context.exam) throw new WorkflowError("INVALID_REQUEST");
       if (step.agentId === "academic-manager") {
-        const result = await core.handleAgentRequest({ request: input.request, preferredAgentId: "academic-manager", courseId: context.courseId, examId: context.exam.id }, headers);
+        const result = await core.handleAgentRequest({ request: input.request, preferredAgentId: "academic-manager", courseId: context.courseId, examId: context.exam.id,
+          ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers);
         if (!result.ok) throw new WorkflowError(result.error.code as import("./errors").WorkflowErrorCode);
         const analysis = result.response.structuredData as AcademicManagerResponse;
         const learning = await buildUserContext({ request: "Learning evidence for exam preparation", courseId: context.courseId, examId: context.exam.id, options: { learning: true, limits: { learning: 10 } } }, headers, cache);
@@ -85,19 +91,25 @@ export class WorkflowService {
         return { summary: "Analyzed exam readiness, recent performance, confidence and existing study work.", patch: { ...decisions, priorities, studyPlanId, quizId, planCurrent, quizCurrent }, data: { priorities, weakTopics: decisions.topics.filter((t) => t.mastery < 70).map((t) => ({ topic: t.topic, mastery: t.mastery, confidence: t.confidence, trend: t.trend, recentAccuracy: t.recentAccuracy })), daysRemaining: context.exam.daysRemaining, quizMode: decisions.quizMode } };
       }
       if (step.agentId === "study-planner") {
-        const request = { request: input.request, courseId: context.courseId, examId: context.exam.id, endDate: calendarDate(new Date(context.exam.examDate), context.timezone), ...(context.availability ? { availability: context.availability } : {}) };
+        const request = { request: input.request, courseId: context.courseId, examId: context.exam.id, endDate: calendarDate(new Date(context.exam.examDate), context.timezone),
+          ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}),
+          ...(context.availability ? { availability: context.availability } : {}) };
         const plan = context.studyPlanId ? await planner.updatePlan({ ...request, planId: context.studyPlanId }, headers) : await planner.createPlan(request, headers);
         if (!await this.ownedPlan(plan.id, userId, context.courseId, context.exam.id)) throw new WorkflowError("REFERENCE_NOT_FOUND");
         return { summary: `${context.studyPlanId ? "Updated" : "Created"} the exam study plan, preserving completed work.`, patch: { studyPlanId: plan.id, planCurrent: true }, data: { studyPlanId: plan.id, assumptions: plan.assumptions, nextStudyTasks: plan.days.flatMap((d) => d.sessions).filter((s) => s.status === "planned" || s.status === "in-progress").slice(0, 5).map((s) => ({ title: s.title, date: s.date, durationMinutes: s.durationMinutes, reason: s.reason })) } };
       }
       if (step.agentId === "quiz") {
-        const generated = await quiz.generateQuiz({ request: input.request, courseId: context.courseId, topic: input.topic, count: 5, questionType: "mixed", difficulty: context.quizMode === "diagnostic" ? "medium" : "adaptive", ...(context.documentIds ? { documentIds: context.documentIds } : {}) }, headers);
+        const generated = await quiz.generateQuiz({ request: input.request, courseId: context.courseId, topic: input.topic, count: 5, questionType: "mixed", difficulty: context.quizMode === "diagnostic" ? "medium" : "adaptive",
+          ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}),
+          ...(context.documentIds ? { documentIds: context.documentIds } : {}) }, headers);
         const covered = new Set(generated.questions.flatMap((q) => q.topics).map(normalizeTopicName));
         if (generated.courseId !== context.courseId || context.targetTopics.some((t) => !covered.has(normalizeTopicName(t)))) throw new WorkflowError("INVALID_RESPONSE");
         return { summary: `Created a 5-question ${context.quizMode} quiz using the selected learning targets.`, patch: { quizId: generated.id, quizCurrent: true }, data: { quizId: generated.id, targetTopics: context.targetTopics, questionCount: generated.questions.length, mode: context.quizMode } };
       }
       if (step.agentId === "tutor") {
-        const result = await core.handleAgentRequest({ request: input.request, preferredAgentId: "tutor", courseId: context.courseId, ...(context.documentIds ? { documentIds: context.documentIds } : {}) }, headers);
+        const result = await core.handleAgentRequest({ request: input.request, preferredAgentId: "tutor", courseId: context.courseId,
+          ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}),
+          ...(context.documentIds ? { documentIds: context.documentIds } : {}) }, headers);
         if (!result.ok) throw new WorkflowError(result.error.code as import("./errors").WorkflowErrorCode);
         return { summary: `Explained ${input.topic?.slice(0, 160) ?? "the selected weak concept"}.`, data: { topic: input.topic, explanation: result.response.content.slice(0, 6000), truncated: result.response.content.length > 6000, sources: result.response.sources.slice(0, 5) } };
       }
@@ -115,6 +127,13 @@ export class WorkflowService {
     if (!parsed.success) throw new WorkflowError("INVALID_REQUEST");
     const input = parsed.data;
     const cache = new ContextReadCache();
+    if (input.conversationId) {
+      try { await getConversationScope(input.conversationId, headers); }
+      catch (error) {
+        if (error instanceof ConversationError) throw new WorkflowError("REFERENCE_NOT_FOUND");
+        throw error;
+      }
+    }
     if (input.workflowId === "career-preparation") {
       const context = await initialCareerContext(input, headers, cache);
       const registry = new WorkflowRegistry(createStudentAgentRegistry()); registry.register(careerPreparation);
@@ -153,7 +172,7 @@ export class WorkflowService {
       selectedQuiz = await db().quiz.findFirst({ where: { id: input.quizId, userId, courseId: exam.course.id } });
       if (!selectedQuiz) throw new WorkflowError("REFERENCE_NOT_FOUND");
     } else selectedQuiz = await db().quiz.findFirst({ where: { userId, courseId: exam.course.id, createdAt: { gte: new Date(Date.now() - 86400000) } }, orderBy: { createdAt: "desc" } });
-    const context: WorkflowContext = { goal: input.goal, courseId: exam.course.id, timezone, exam, availability: input.availability, documentIds: input.documentIds, priorities: [], topics: [], studyPlanId: plan?.id ?? null, planCurrent: false, quizId: selectedQuiz?.id ?? null, quizCurrent: false, quizMode: "diagnostic", tutorTopic: null, targetTopics: [], previousStepSummaries: [] };
+    const context: WorkflowContext = { goal: input.goal, conversationId: input.conversationId, courseId: exam.course.id, timezone, exam, availability: input.availability, documentIds: input.documentIds, priorities: [], topics: [], studyPlanId: plan?.id ?? null, planCurrent: false, quizId: selectedQuiz?.id ?? null, quizCurrent: false, quizMode: "diagnostic", tutorTopic: null, targetTopics: [], previousStepSummaries: [] };
     const registry = new WorkflowRegistry(createStudentAgentRegistry()); registry.register(examPreparation);
     return this.engine(cache).run(registry.get(input.workflowId), input, context, headers);
   }
@@ -175,6 +194,8 @@ export class WorkflowService {
         if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
         const state = careerPreparationState(context);
         if (context.waitingFor?.kind !== "career-data" || context.waitingFor.referenceId !== state.sourceFingerprint.slice(0, 64)) throw new WorkflowError("INVALID_REQUEST");
+        await this.appendWorkflowInput(context, `workflow-resume:${row.id}:career-data`,
+          `Career evidence provided: ${JSON.stringify(input.careerData)}`, headers);
         await prepareCareerResume(context, input.careerData, headers);
         return this.engine().resume(careerPreparation, row.id, headers, async (saved) => prepareCareerResume(saved, input.careerData, headers), context.waitingFor);
       }
@@ -182,6 +203,7 @@ export class WorkflowService {
         if (row.workflowId !== "assignment-support") throw new WorkflowError("INVALID_REQUEST");
         if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
         if (context.waitingFor?.kind !== "student-work" || context.waitingFor.referenceId !== assignmentState(context).id) throw new WorkflowError("INVALID_REQUEST");
+        await this.appendWorkflowInput(context, `workflow-resume:${row.id}:student-work`, input.userWork, headers);
         await validateAssignmentScope(context, headers);
         return this.engine().resume(assignmentSupport, row.id, headers, async (saved) => {
           await validateAssignmentScope(saved, headers);
@@ -221,14 +243,23 @@ export class WorkflowService {
     const quizId = context.waitingFor?.referenceId;
     if (!quizId || context.waitingFor?.referenceId !== quizId) throw new WorkflowError("INVALID_REQUEST");
     if (parsed.data.quizAttemptId) await continuation.validate(context, userId, parsed.data.quizAttemptId, false);
-    const question = await db().quizQuestion.findFirst({ where: { id: parsed.data.questionId, quizId, userId, quiz: { userId, courseId: context.courseId, course: { userId } }, topicMappings: { some: { ...(context.recovery ? { topicId: context.recovery.topicId } : {}), userId, topic: { userId } } } }, select: { id: true } });
+    const question = await db().quizQuestion.findFirst({ where: { id: parsed.data.questionId, quizId, userId, quiz: { userId, courseId: context.courseId, course: { userId } }, topicMappings: { some: { ...(context.recovery ? { topicId: context.recovery.topicId } : {}), userId, topic: { userId } } } }, select: { id: true, prompt: true } });
     if (!question) throw new WorkflowError("REFERENCE_NOT_FOUND");
     const quiz = new QuizAgentService(createStudentAgentRegistry(), { getProvider: this.options.getProvider });
-    try { return await quiz.evaluateAnswer({ quizId, questionId: parsed.data.questionId, userAnswer: parsed.data.userAnswer, quizAttemptId: parsed.data.quizAttemptId }, headers); }
-    catch {
+    let evaluation;
+    try {
+      evaluation = await quiz.evaluateAnswer({ quizId, questionId: parsed.data.questionId, userAnswer: parsed.data.userAnswer, quizAttemptId: parsed.data.quizAttemptId }, headers);
+    } catch {
       await db().workflowRun.updateMany({ where: { id: row.id, userId, status: "WAITING_FOR_INPUT", NOT: { warnings: { has: "GRADING_FAILURE" } } }, data: { warnings: { push: "GRADING_FAILURE" } } });
       throw new WorkflowError("GRADING_FAILURE");
     }
+    await this.appendWorkflowInput(
+      context,
+      `workflow-answer:${row.id}:${parsed.data.questionId}:${evaluation.quizAttemptId}`,
+      `Quiz answer to ${JSON.stringify(question.prompt)}: ${parsed.data.userAnswer}`,
+      headers,
+    );
+    return evaluation;
   }
 
   /** Domain-specific references plug into one shared claim/resume/grading path. */
@@ -248,6 +279,29 @@ export class WorkflowService {
         } };
     }
     throw new WorkflowError("INVALID_REQUEST");
+  }
+
+  private async appendWorkflowInput(
+    context: Readonly<WorkflowContext>,
+    turnId: string,
+    content: string,
+    headers: Headers,
+  ) {
+    if (!context.conversationId) return;
+    try {
+      await appendConversationMessage({
+        conversationId: context.conversationId,
+        role: "user",
+        content,
+        turnId,
+        metadata: { workflow: true, workspaceVisible: false },
+      }, headers, this.options.conversationEmbeddingProvider !== undefined
+        ? { embeddingProvider: this.options.conversationEmbeddingProvider }
+        : {});
+    } catch (error) {
+      if (error instanceof ConversationError) throw new WorkflowError("REFERENCE_NOT_FOUND");
+      throw error;
+    }
   }
 
   private async ownedPlan(id: string | undefined, userId: string, courseId: string, examId: string) {

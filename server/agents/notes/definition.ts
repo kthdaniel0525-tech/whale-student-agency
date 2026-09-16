@@ -16,10 +16,13 @@ const definition: Agent = {
   contextRequirements: {
     course: true,
     documents: true,
+    exams: true,
+    learning: true,
     memories: true,
     memoryCategories: ["preference"],
     memoryKeys: ["noteStyle", "answerLength"],
-    limits: { memories: 3 },
+    deadlineWindowDays: 30,
+    limits: { exams: 4, learning: 6, memories: 3 },
   },
 };
 

@@ -22,6 +22,7 @@ export const careerProvidedDataSchema = z.object({
 }).strict().refine((value) => Boolean(value.resumeData || value.experienceSummary || value.portfolioLinks?.length), "Supply at least one career evidence field.");
 export const careerInputSchema = z.object({
   workflowId: z.literal("career-preparation"), goal: z.string().trim().min(3).max(1000),
+  conversationId: id.optional(),
   targetRole: compactText(160).optional(), targetIndustry: compactText(120).optional(), targetCompanies: z.array(compactText(120)).max(10).default([]),
   applicationTimeline: compactText(100).optional(), resumeData: compactText(5000).optional(),
   projectIds: z.array(id).min(1).max(10).transform((ids) => [...new Set(ids)].sort()).optional(),
@@ -77,7 +78,7 @@ export async function initialCareerContext(input: z.infer<typeof careerInputSche
     nextAction: missingInputs.length ? `Provide ${missingInputs.join(" and ")} to continue.` : `Assess the highest-leverage gaps for ${targetRole}.`,
     limitations: [...career.limitations, "General role guidance only; no live job or company requirements were verified."],
   };
-  return { goal: input.goal, courseId: "", careerPreparation: state, priorities: [], topics: [], studyPlanId: null, planCurrent: false,
+  return { goal: input.goal, conversationId: input.conversationId, courseId: "", careerPreparation: state, priorities: [], topics: [], studyPlanId: null, planCurrent: false,
     quizId: null, quizCurrent: false, quizMode: "practice", tutorTopic: null, targetTopics: [], previousStepSummaries: [] };
 }
 
@@ -128,6 +129,7 @@ export class CareerPreparationWorkflowAdapter {
     const providedEvidence = { ...state.provided, targetCompanies: state.targetCompanies,
       timeline: state.timeline, weeklyAvailableMinutes: state.weeklyAvailableMinutes, readiness: state.readiness };
     const execution = await this.executor.executeStructured({ agentId: "career", request: input.request,
+      ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}),
       ...(state.selectedProjectIds.length ? { projectIds: state.selectedProjectIds } : {}) }, headers, {
       schemaName: "career_preparation", schema: careerPreparationAnalysisSchema, maxOutputTokens: 7000,
       referenceData: JSON.stringify(providedEvidence),

@@ -169,10 +169,13 @@ describe.sequential("Notes Agent through the existing framework", () => {
     expect(notes.contextRequirements).toEqual({
       course: true,
       documents: true,
+      exams: true,
+      learning: true,
       memories: true,
       memoryCategories: ["preference"],
       memoryKeys: ["noteStyle", "answerLength"],
-      limits: { memories: 3 },
+      deadlineWindowDays: 30,
+      limits: { exams: 4, learning: 6, memories: 3 },
     });
     expect(notes.capabilities).toEqual([
       "summarize-documents",
@@ -308,13 +311,14 @@ describe.sequential("Notes Agent through the existing framework", () => {
     );
   });
 
-  it("loads note preferences while excluding unrelated academic context", async () => {
+  it("loads bounded exam and learning signals while excluding unrelated profile and assignments", async () => {
     const { service } = setup();
     const unused = [
       vi.spyOn(categories, "profileContext"),
       vi.spyOn(categories, "assignmentContext"),
-      vi.spyOn(categories, "examContext"),
     ];
+    const exams = vi.spyOn(categories, "examContext");
+    const learning = vi.spyOn(categories, "learningContext");
     const memories = vi.spyOn(categories, "memoryContext");
     const build = vi.spyOn(contextBuilder, "buildUserContext");
     const result = await service.handleAgentRequest(
@@ -323,13 +327,17 @@ describe.sequential("Notes Agent through the existing framework", () => {
     );
     expect(result.ok).toBe(true);
     for (const spy of unused) expect(spy).not.toHaveBeenCalled();
+    expect(exams).toHaveBeenCalledTimes(1);
+    expect(learning).toHaveBeenCalledTimes(1);
     expect(memories).toHaveBeenCalledTimes(1);
     const context = await build.mock.results[0].value;
     expect(context.metadata.requestedCategories).toEqual([
       "course",
+      "exams",
       "documents",
       "memories",
+      "learning",
     ]);
-    expect(context.learning).toBeUndefined();
+    expect(context.assignments).toBeUndefined();
   });
 });

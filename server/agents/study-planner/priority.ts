@@ -15,6 +15,7 @@ import type {
   StudyAvailability,
 } from "./types";
 import type { PersonalizationProfile } from "../../personalization";
+import type { AdaptiveStrategy } from "../../adaptive";
 
 const DAY = 86_400_000;
 const MINIMUM_SESSION = 15;
@@ -405,9 +406,12 @@ function requestedMinutes(request: string): number | undefined {
 function sessionPreference(
   context: UserContext,
   personalization: Readonly<PersonalizationProfile> | undefined,
+  adaptive: Readonly<AdaptiveStrategy> | undefined,
   supplied?: number,
 ): number {
   if (supplied) return supplied;
+  if (adaptive?.recommendedSessionMinutes)
+    return adaptive.recommendedSessionMinutes;
   if (personalization?.studySessionMinutes)
     return personalization.studySessionMinutes.value;
   // Direct callers that do not execute an Agent still retain the explicit profile default.
@@ -443,11 +447,14 @@ function availabilityFor(
   endDate: string,
   options: PlanningBriefOptions,
   defaultMinutes: number,
+  planningIntensity: AdaptiveStrategy["planningIntensity"] | undefined,
 ): { availability: StudyAvailability[]; assumptions: string[] } {
   const dates = allDates(startDate, endDate);
   const supplied = new Map(options.availability?.map((item) => [item.date, item.availableMinutes]));
   const requestMinutes = requestedMinutes(options.request);
   const assumptions: string[] = [];
+  const defaultSessions = planningIntensity === "light" ? 1 : planningIntensity === "high" ? 3 : 2;
+  const defaultAvailableMinutes = clamp(defaultMinutes * defaultSessions, 30, 240);
   const availability = dates.map((date) => {
     let minutes: number;
     if (options.mode === "now" && options.availableMinutes !== undefined) {
@@ -457,14 +464,14 @@ function availabilityFor(
     } else if (requestMinutes !== undefined && dates.length === 1) {
       minutes = requestMinutes;
     } else {
-      minutes = clamp(defaultMinutes * 2, 60, 180);
+      minutes = defaultAvailableMinutes;
     }
     const reserved = options.reservedMinutesByDate?.[date] ?? 0;
     return { date, availableMinutes: Math.max(0, minutes - reserved) };
   });
   if (!supplied.size && requestMinutes === undefined && options.availableMinutes === undefined) {
     assumptions.push(
-      `Assumed ${clamp(defaultMinutes * 2, 60, 180)} available study minutes per day because no availability was provided.`,
+      `Assumed ${defaultAvailableMinutes} available study minutes per day because no availability was provided.`,
     );
   }
   if (Object.keys(options.reservedMinutesByDate ?? {}).length) {
@@ -478,6 +485,7 @@ export function createPlanningBrief(
   context: UserContext,
   options: PlanningBriefOptions,
   personalization?: Readonly<PersonalizationProfile>,
+  adaptive?: Readonly<AdaptiveStrategy>,
 ): PlanningBrief {
   const generatedAt = new Date(context.metadata.generatedAt);
   const today = todayAt(
@@ -499,6 +507,7 @@ export function createPlanningBrief(
   const preferredSessionMinutes = sessionPreference(
     context,
     personalization,
+    adaptive,
     options.preferredSessionMinutes,
   );
   const personalizedMaximum = personalization?.maxContinuousMinutes?.value;
@@ -516,6 +525,7 @@ export function createPlanningBrief(
     endDate,
     options,
     preferredSessionMinutes,
+    adaptive?.planningIntensity,
   );
   const totalAvailableMinutes = availabilityResult.availability.reduce(
     (sum, item) => sum + item.availableMinutes,

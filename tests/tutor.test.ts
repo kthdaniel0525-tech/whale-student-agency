@@ -25,6 +25,7 @@ import { AgentService } from "@/server/agents/core";
 import { AgentExecutor } from "@/server/agents/executor";
 import { AgentRouter } from "@/server/agents/router";
 import { createStudentAgentService } from "@/server/agents/student-service";
+import { createConversation } from "@/server/conversations";
 import { getTutorAgentDefinition } from "@/server/agents/tutor/definition";
 import { TUTOR_INSTRUCTIONS } from "@/server/agents/tutor/instructions";
 import * as contextBuilder from "@/server/context/builder";
@@ -131,6 +132,7 @@ function setup(instructions?: string) {
     router: { getProvider: ai.getProvider },
     executor: {
       getProvider: ai.getProvider,
+      conversationEmbeddingProvider: null,
       ...(instructions ? { instructions: { tutor: instructions } } : {}),
     },
   });
@@ -320,14 +322,12 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     );
     expect(result.ok).toBe(true);
     const prompt = messages(ai);
-    expect(prompt.map((message) => message.content).join("\n")).toContain(
-      '"depth":"beginner"',
-    );
+    expect(prompt[0].content).toContain('"responseDepth":"foundational"');
     expect(prompt.map((message) => message.content).join("\n")).not.toContain(
       '"explanationDifficulty":"BEGINNER"',
     );
     expect(prompt[0].content).toContain("Apply the supplied PERSONALIZATION");
-    expect(prompt[1].content).toContain('"examples":"as-needed"');
+    expect(prompt[0].content).toContain('"explanationApproach":"intuitive"');
   });
 
   it("passes the real advanced preference with concise rigorous explanation guidance", async () => {
@@ -338,9 +338,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     );
     expect(result.ok).toBe(true);
     const prompt = messages(ai);
-    expect(prompt.map((message) => message.content).join("\n")).toContain(
-      '"depth":"advanced"',
-    );
+    expect(prompt[0].content).toContain('"responseDepth":"advanced"');
     expect(prompt.map((message) => message.content).join("\n")).not.toContain(
       '"explanationDifficulty":"ADVANCED"',
     );
@@ -373,11 +371,12 @@ describe.sequential("Tutor through the existing student Agent service", () => {
   it("asks for clarification for a vague example request without assuming conversation history", async () => {
     const { ai, service } = setup();
     const request = "Give me an example";
+    const conversation = await createConversation({}, advanced.headers);
     const result = await service.handleAgentRequest(
       {
         request,
         preferredAgentId: "tutor",
-        conversation: { id: "private-old-conversation" },
+        conversation: { id: conversation.id },
       },
       advanced.headers,
     );
@@ -387,7 +386,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
       "ask for the concept or attempted answer if missing",
     );
     expect(prompt.at(-1)).toEqual({ role: "user", content: request });
-    expect(JSON.stringify(prompt)).not.toContain("private-old-conversation");
+    expect(JSON.stringify(prompt)).not.toContain(conversation.id);
     expect(ai.structured).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import "server-only";
 import { cleanupAfterDelete } from "@/server/documents/cleanup";
 import { db } from "@/server/db/client";
+import { getTopRecommendations, refreshRecommendationsBestEffort } from "@/server/recommendations";
 import type {
   CourseInput,
   AssignmentInput,
@@ -55,7 +56,9 @@ export async function updateCourse(
 export async function deleteCourse(userId: string, id: string) {
   const result = await db().course.deleteMany({ where: { id, userId } });
   if (!result.count) throw new NotFoundError();
-  return { success: true, cleanupPending: await cleanupAfterDelete(userId) };
+  const cleanupPending = await cleanupAfterDelete(userId);
+  await refreshRecommendationsBestEffort(userId);
+  return { success: true, cleanupPending };
 }
 export async function createAssignment(
   userId: string,
@@ -63,7 +66,7 @@ export async function createAssignment(
   input: AssignmentInput,
 ) {
   await getCourse(userId, courseId);
-  return db().assignment.create({
+  const assignment = await db().assignment.create({
     data: {
       ...input,
       dueDate: new Date(input.dueDate),
@@ -72,6 +75,8 @@ export async function createAssignment(
       completedAt: input.status === "COMPLETED" ? new Date() : null,
     },
   });
+  await refreshRecommendationsBestEffort(userId);
+  return assignment;
 }
 export async function getAssignment(userId: string, id: string) {
   const item = await db().assignment.findFirst({ where: { id, userId } });
@@ -94,11 +99,13 @@ export async function updateAssignment(
     },
   });
   if (!result.count) throw new NotFoundError();
+  await refreshRecommendationsBestEffort(userId);
   return getAssignment(userId, id);
 }
 export async function deleteAssignment(userId: string, id: string) {
   const result = await db().assignment.deleteMany({ where: { id, userId } });
   if (!result.count) throw new NotFoundError();
+  await refreshRecommendationsBestEffort(userId);
 }
 export async function createExam(
   userId: string,
@@ -106,9 +113,11 @@ export async function createExam(
   input: ExamInput,
 ) {
   await getCourse(userId, courseId);
-  return db().exam.create({
+  const exam = await db().exam.create({
     data: { ...input, examDate: new Date(input.examDate), userId, courseId },
   });
+  await refreshRecommendationsBestEffort(userId);
+  return exam;
 }
 export async function getExam(userId: string, id: string) {
   const item = await db().exam.findFirst({ where: { id, userId } });
@@ -121,11 +130,13 @@ export async function updateExam(userId: string, id: string, input: ExamInput) {
     data: { ...input, examDate: new Date(input.examDate) },
   });
   if (!result.count) throw new NotFoundError();
+  await refreshRecommendationsBestEffort(userId);
   return getExam(userId, id);
 }
 export async function deleteExam(userId: string, id: string) {
   const result = await db().exam.deleteMany({ where: { id, userId } });
   if (!result.count) throw new NotFoundError();
+  await refreshRecommendationsBestEffort(userId);
 }
 export async function saveProfile(userId: string, input: ProfileInput) {
   const { name, ...data } = input;
@@ -140,7 +151,7 @@ export async function saveProfile(userId: string, input: ProfileInput) {
   return { ...profile, name };
 }
 export async function dashboard(userId: string) {
-  const [courses, assignments, exams] = await Promise.all([
+  const [courses, assignments, exams, recommendations] = await Promise.all([
     listCourses(userId),
     db().assignment.findMany({
       where: { userId, status: { not: "COMPLETED" } },
@@ -154,6 +165,7 @@ export async function dashboard(userId: string) {
       take: 8,
       include: { course: { select: { courseCode: true } } },
     }),
+    getTopRecommendations({ userId, limit: 5 }),
   ]);
-  return { courses, assignments, exams };
+  return { courses, assignments, exams, recommendations };
 }

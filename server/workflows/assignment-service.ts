@@ -18,6 +18,7 @@ const id = z.string().min(1).max(100);
 export const studentWorkSchema = z.string().trim().min(1).max(6000);
 export const assignmentInputSchema = z.object({
   workflowId: z.literal("assignment-support"), goal: z.string().trim().min(3).max(1000), assignmentId: id,
+  conversationId: id.optional(),
   courseId: id.optional(), documentIds: z.array(id).min(1).max(10).transform((ids) => [...new Set(ids)].sort()).optional(),
   userWork: studentWorkSchema.optional(), specificQuestion: z.string().trim().min(1).max(1000).optional(),
   availableMinutes: z.number().int().min(1).max(480).optional(),
@@ -56,7 +57,7 @@ export async function initialAssignmentContext(input: z.infer<typeof assignmentI
     const document = await getDocument(userId, id);
     return { id, updatedAt: document.updatedAt.toISOString() };
   }));
-  const context: WorkflowContext = { goal: input.goal, courseId: assignment.course.id, documentIds: input.documentIds,
+  const context: WorkflowContext = { goal: input.goal, conversationId: input.conversationId, courseId: assignment.course.id, documentIds: input.documentIds,
     priorities: [], topics: [], studyPlanId: null, planCurrent: false, quizId: null, quizCurrent: false, quizMode: "practice", tutorTopic: null, targetTopics: [], previousStepSummaries: [],
     assignment: { id: assignment.id, title: assignment.title, updatedAt: assignment.updatedAt!, documents,
       path: assignmentPath(input), signals: assignmentSignals(assignment, input.availableMinutes),
@@ -106,6 +107,7 @@ export class AssignmentWorkflowAdapter {
     const officialRequired = step.id === "understand" || step.id === "review" || step.id === "help" && state.path.helpStage === "work";
     const documents = step.id !== "understand";
     const request = { agentId: step.agentId as "tutor" | "notes", request: input.request, courseId: context.courseId, assignmentId: state.id,
+      ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}),
       ...(context.documentIds ? { documentIds: context.documentIds } : {}) };
     const contextOverrides = { assignments: officialRequired, documents, selectedDocumentCoverage: documents && Boolean(context.documentIds?.length), limits: { documents: 10, maxCharacters: 40000 } };
     const sourceOptions = { contextOverrides, requireDocumentSources: documents && Boolean(context.documentIds?.length) };

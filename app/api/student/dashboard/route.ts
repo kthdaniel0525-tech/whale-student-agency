@@ -1,5 +1,6 @@
 import { api } from "@/server/api";
-import { dashboard } from "@/server/services/academic";
-export function GET(req: Request) {
-  return api(req, dashboard);
+import { getStudentDashboard } from "@/server/dashboard";
+
+export function GET(request: Request) {
+  return api(request, (userId) => getStudentDashboard(userId, request.headers));
 }

@@ -23,6 +23,7 @@ import { AgentRegistry, getStudentAgentDefinitions } from "@/server/agents";
 import { AgentRouter } from "@/server/agents/router";
 import { AgentExecutor } from "@/server/agents/executor";
 import { AgentService } from "@/server/agents/core";
+import { createConversation } from "@/server/conversations";
 
 type Actor = { id: string; email: string; headers: Headers };
 const actors: Actor[] = [];
@@ -158,7 +159,7 @@ function setup() {
   const ai = providerBoundary();
   const service = new AgentService(agents, {
     router: { getProvider: ai.getProvider },
-    executor: { getProvider: ai.getProvider },
+    executor: { getProvider: ai.getProvider, conversationEmbeddingProvider: null },
   });
   return { agents, ai, service };
 }
@@ -365,12 +366,13 @@ describe.sequential(
       const sessionsBefore = await db().session.findMany({
         where: { userId: student.id },
       });
+      const conversation = await createConversation({ courseId }, student.headers);
       const result = await service.handleAgentRequest(
         {
           request: "Explain mathematical induction",
           courseId,
           documentIds: [documentId],
-          conversation: { id: "PRIVATE CONVERSATION", turnId: "PRIVATE TURN" },
+          conversation: { id: conversation.id, turnId: "PRIVATE TURN" },
         },
         student.headers,
       );
@@ -400,6 +402,10 @@ describe.sequential(
         },
       ]);
       expect(result.metadata).toMatchObject(executed.metadata!);
+      expect(result.metadata).toMatchObject({
+        conversationId: conversation.id,
+        conversationTurnId: "PRIVATE TURN",
+      });
       expect(result.metadata.totalDurationMs).toBeGreaterThanOrEqual(
         result.metadata.durationMs!,
       );
@@ -414,7 +420,7 @@ describe.sequential(
       expect(prompt).toContain("Core Student");
       expect(prompt).toContain(material);
       expect(prompt).not.toMatch(
-        /FOREIGN PRIVATE|PRIVATE CONVERSATION|PRIVATE TURN/,
+        /FOREIGN PRIVATE|PRIVATE CONVERSATION/,
       );
       for (const privateValue of [
         material,
@@ -422,7 +428,6 @@ describe.sequential(
         student.id,
         "private-provider-response-id",
         "PRIVATE CONVERSATION",
-        "PRIVATE TURN",
       ])
         expect(JSON.stringify(result)).not.toContain(privateValue);
       expect(

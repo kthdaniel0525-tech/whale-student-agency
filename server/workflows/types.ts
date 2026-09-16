@@ -15,6 +15,7 @@ export type FailurePolicy = "fail-workflow" | "skip-step" | "continue-with-warni
 export type WorkflowInput = {
   workflowId: WorkflowId;
   goal: string;
+  conversationId?: string;
   examId?: string;
   assignmentId?: string;
   userWork?: string;
@@ -43,6 +44,8 @@ export type WorkflowInput = {
 };
 export type WorkflowContext = {
   goal: string;
+  /** Optional ongoing conversation; workflow state remains authoritative. */
+  conversationId?: string;
   courseId: string;
   timezone?: string;
   exam?: ExamContext;

@@ -8,6 +8,8 @@ import type { AgentExecutionInput, AgentId } from "../types";
 import type { z } from "zod";
 import type { ContextReadCache } from "../../context/cache";
 import type { PersonalizationProfile } from "../../personalization";
+import type { AIEmbeddingProvider } from "../../ai/types";
+import type { AdaptiveStrategy } from "../../adaptive";
 
 /** Public server input: identity and prepared context are never client-supplied. */
 export type AgentExecutionRequest<Extension extends string = never> = Pick<
@@ -15,7 +17,7 @@ export type AgentExecutionRequest<Extension extends string = never> = Pick<
   "request" | "courseId" | "examId" | "assignmentId" | "projectIds" | "documentIds"
 > & {
   readonly agentId: AgentId<Extension>;
-  /** IDs only for future correlation; no history is loaded or sent to the model. */
+  /** Optional owned conversation whose bounded context is loaded server-side. */
   readonly conversation?: AgentExecutionInput["conversation"];
 };
 
@@ -24,6 +26,8 @@ export interface AgentExecutorOptions<Extension extends string = never> {
   /** Trusted short execution instructions, separate from routing metadata. */
   readonly instructions?: Readonly<Partial<Record<AgentId<Extension>, string>>>;
   readonly getProvider?: () => AIProvider | Promise<AIProvider>;
+  /** null disables optional semantic conversation retrieval/embedding. */
+  readonly conversationEmbeddingProvider?: AIEmbeddingProvider | null;
 }
 
 export interface AgentStructuredExecutionOptions<T> {
@@ -37,6 +41,7 @@ export interface AgentStructuredExecutionOptions<T> {
   readonly buildDirective?: (
     context: Readonly<UserContext>,
     personalization: Readonly<PersonalizationProfile>,
+    adaptiveStrategy: Readonly<AdaptiveStrategy>,
   ) => string | Promise<string>;
   /** Bounded reference data from trusted server orchestration, sent as user data. */
   readonly referenceData?: string;
@@ -50,5 +55,7 @@ export type AgentExecutionErrorCode =
   | "INVALID_CONFIGURATION"
   | "UNKNOWN_AGENT"
   | "UNAUTHENTICATED"
+  | "CONVERSATION_NOT_FOUND"
+  | "CONVERSATION_FAILURE"
   | "CONTEXT_FAILURE"
   | "SOURCE_CONTEXT_UNAVAILABLE";

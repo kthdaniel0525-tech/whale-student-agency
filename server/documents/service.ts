@@ -7,6 +7,7 @@ import { validateFile } from "./extraction";
 import { DocumentError } from "./config";
 import { cleanupAfterDelete } from "./cleanup";
 import { uploadMetadata } from "@/features/documents/validation/schemas";
+import { refreshRecommendationsBestEffort } from "@/server/recommendations";
 export const documentSelect = {
   id: true,
   title: true,
@@ -107,7 +108,9 @@ export async function uploadDocument(
 export async function deleteDocument(userId: string, id: string) {
   const result = await db().document.deleteMany({ where: { id, userId } });
   if (!result.count) throw new NotFoundError();
-  return { success: true, cleanupPending: await cleanupAfterDelete(userId) };
+  const cleanupPending = await cleanupAfterDelete(userId);
+  await refreshRecommendationsBestEffort(userId);
+  return { success: true, cleanupPending };
 }
 export async function retryDocument(userId: string, id: string) {
   await getDocument(userId, id);

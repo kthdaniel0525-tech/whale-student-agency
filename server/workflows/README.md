@@ -13,6 +13,7 @@ const result = await workflows.runWorkflow({
   goal: "Help me prepare for my MATH midterm.",
   examId, // Recommended. Otherwise one unambiguous upcoming exam is required.
   courseId, // Optional; must match the exam when supplied.
+  conversationId, // Optional owned ongoing conversation.
   availability: [{ date: "2026-09-14", availableMinutes: 120 }], // Optional.
 }, request.headers);
 
@@ -39,6 +40,12 @@ Manager and Tutor use Agent Core; Planner and Quiz use their existing domain ser
 ## Context and outputs
 
 `WorkflowContext` holds the bounded goal, selected exam/course, availability, ranked learning evidence, plan/quiz IDs and short prior-step summaries. It does not forward complete agent responses between steps. Tutor explanation is retained in the result up to 6,000 characters with an explicit truncation flag; later steps receive the selected topic rather than a copy of that explanation. Plan output contains an ID and at most five next tasks. Quiz output contains an ID, target topics and question count; answers remain in the existing Quiz service.
+
+An optional owned `conversationId` is persisted in `WorkflowContext` and passed to
+the shared AgentExecutor for continuity. `WorkflowRun.context` remains authoritative
+for current step, status, quiz/plan references and pending input. Drafts and quiz
+answers submitted after a wait are appended as visible conversation input, while
+resume decisions never infer state from a conversation summary.
 
 The optional server-only `ContextReadCache` reuses compatible category reads during one short workflow. Every cache hit still passes authentication and scope checks; keys include the authenticated owner and relevant scope. Entries expire after 60 seconds, are cloned before use, and are limited to 64 entries. Learning context can reuse a larger already-loaded summary. Planner operations invalidate academic-overview state. Quiz operations invalidate learning and overview state even when an operation fails after a possible write. Subsequent reads therefore refresh changed aggregates. No cache or raw prepared context is accepted from the frontend.
 

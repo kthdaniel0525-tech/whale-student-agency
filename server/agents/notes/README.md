@@ -56,7 +56,8 @@ describe the context supplied to the model, not independently verified citations
 Instructions remain below the Executor's 1000-character limit. Generic callers
 constructing AgentService or AgentExecutor directly can supply NOTES_INSTRUCTIONS
 under the existing `executor.instructions.notes` configuration. No UI, persistent
-notes storage, conversation history or additional model settings are added.
+notes storage or additional model settings are added. Optional conversation
+continuity comes from the shared Executor layer, not Notes-specific storage.
 
 ## Verification
 

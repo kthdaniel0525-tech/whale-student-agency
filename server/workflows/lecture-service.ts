@@ -20,6 +20,7 @@ import type { StepInput, StepOutput, WorkflowContext, WorkflowStep } from "./typ
 const id = z.string().min(1).max(100);
 export const lectureInputSchema = z.object({
   workflowId: z.literal("lecture-study"), goal: z.string().trim().min(3).max(1000), courseId: id.optional(),
+  conversationId: id.optional(),
   documentId: id.optional(), documentIds: z.array(id).min(1).max(LECTURE_CONFIG.maximumDocuments).optional(),
   topicFocus: z.string().trim().min(1).max(120).optional(), difficulty: z.enum(["easy", "medium", "hard"]).optional(),
   mode: z.enum(["quick-review", "standard-study", "deep-study"]).optional(), availableMinutes: z.number().int().min(1).max(480).optional(),
@@ -48,7 +49,7 @@ export async function initialLectureContext(input: z.infer<typeof lectureInputSc
   const courseId = input.courseId ?? documents[0].courseId;
   if (!courseId || documents.some((doc) => doc.courseId !== courseId)) throw new WorkflowError("REFERENCE_NOT_FOUND");
   const settings = lectureStudySettings(input);
-  const context: WorkflowContext = { goal: input.goal, courseId, documentIds,
+  const context: WorkflowContext = { goal: input.goal, conversationId: input.conversationId, courseId, documentIds,
     priorities: [], topics: [], studyPlanId: null, planCurrent: false, quizId: null, quizCurrent: false, quizMode: "practice", tutorTopic: null, targetTopics: [], previousStepSummaries: [],
     lecture: { ...settings, documents: documents.map((d) => ({ id: d.id, title: d.title, pageCount: d.pageCount, updatedAt: d.updatedAt.toISOString() })),
       topicFocus: input.topicFocus, requestedDifficulty: input.difficulty, concepts: [], tutorTargets: [], practiceTopics: [], learningBefore: [], sources: [], quiz: null, summary: null } };
@@ -88,7 +89,8 @@ export class LectureWorkflowAdapter {
     const state = structuredClone(lectureState(context));
     const documentIds = context.documentIds!;
     if (step.agentId === "notes") {
-      const notes = await executeStructuredNotes(this.executor, { agentId: "notes", courseId: context.courseId, documentIds, request: input.request }, headers,
+      const notes = await executeStructuredNotes(this.executor, { agentId: "notes", courseId: context.courseId, documentIds, request: input.request,
+        ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers,
         { detail: LECTURE_CONFIG.modes[state.mode].detail, maximumConcepts: LECTURE_CONFIG.maximumConcepts, reviewMinutes: state.effort.notesMinutes, focus: state.topicFocus });
       if (!notes.data.focusCovered) throw new WorkflowError("SOURCE_CONTEXT_UNAVAILABLE");
       const sourceRefs = addSources(state, notes.sources, documentIds);
@@ -101,7 +103,8 @@ export class LectureWorkflowAdapter {
         data: { title: notes.data.title, topics: notes.data.topics, concepts: notes.data.concepts.map(({ sourceIndices, ...c }) => ({ ...c, sourceRefs: sourceIndices.map((i) => sourceRefs[i]) })), estimatedMinutes: state.effort.notesMinutes } };
     }
     if (step.agentId === "tutor") {
-      const execution = await this.executor.executeStructured({ agentId: "tutor", request: input.request, courseId: context.courseId, documentIds }, headers, {
+      const execution = await this.executor.executeStructured({ agentId: "tutor", request: input.request, courseId: context.courseId, documentIds,
+        ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers, {
         schemaName: "lecture_explanation", schema: tutorSchema, maxOutputTokens: state.mode === "deep-study" ? 6000 : 3500, requireDocumentSources: true,
         contextOverrides: { limits: { documents: 10, maxCharacters: 40000 } },
         referenceData: JSON.stringify({ concepts: state.concepts.filter((c) => state.tutorTargets.includes(c.topic)).map(({ topic, keyIdea }) => ({ topic, keyIdea })), learning: state.learningBefore.filter((t) => state.tutorTargets.includes(t.topic)), mode: state.mode, estimatedMinutes: state.effort.tutorMinutes }),
@@ -116,7 +119,8 @@ export class LectureWorkflowAdapter {
     }
     if (step.agentId === "quiz") {
       const difficulty = selectLectureTargets(state).difficulty;
-      const generated = await this.quiz.generateQuiz({ request: input.request, courseId: context.courseId, documentIds, count: state.effort.questionCount, questionType: "mixed", difficulty }, headers, {
+      const generated = await this.quiz.generateQuiz({ request: input.request, courseId: context.courseId, documentIds, count: state.effort.questionCount, questionType: "mixed", difficulty,
+        ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers, {
         contextOverrides: { selectedDocumentCoverage: true, limits: { documents: 10, maxCharacters: 40000 } },
         maxOutputTokens: state.mode === "deep-study" ? 7500 : state.mode === "standard-study" ? 5000 : 2500,
         referenceData: JSON.stringify({ composition: "Cover every practice target using its exact topic name. Include concept recall, meaningful application and written reasoning. Scaffold weak concepts before application, diagnose uncertain topics, and include a harder transfer question when appropriate. Do not make every question hard just because the mode is deep-study.", practiceTopics: state.practiceTopics, keyIdeas: state.concepts.filter((c) => state.practiceTopics.includes(c.topic)).map(({ topic, keyIdea }) => ({ topic, keyIdea })), learning: state.learningBefore, studyMode: state.mode, difficulty, feedback: state.mode === "deep-study" ? "Explain the reasoning and typical misconceptions in the answer explanations." : "Provide concise useful answer explanations." }),

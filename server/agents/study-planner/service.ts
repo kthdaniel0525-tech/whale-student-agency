@@ -2,6 +2,8 @@ import "server-only";
 import { auth } from "../../auth/config";
 import { db } from "../../db/client";
 import { observeStudyTaskOutcome } from "../../memory";
+import { recordAdaptiveOutcome } from "../../adaptive";
+import { refreshRecommendationsBestEffort } from "../../recommendations";
 import { AgentExecutor } from "../executor";
 import type { AgentExecutorOptions } from "../executor";
 import type { AgentRegistry } from "../registry";
@@ -364,6 +366,7 @@ export class StudyPlannerAgentService {
       {
         agentId: "study-planner",
         request: parsed.data.request,
+        ...(parsed.data.conversation ? { conversation: parsed.data.conversation } : {}),
         ...(parsed.data.examId ? { examId: parsed.data.examId } : {}),
         ...(parsed.data.courseId ? { courseId: parsed.data.courseId } : {}),
         ...(parsed.data.documentIds ? { documentIds: parsed.data.documentIds } : {}),
@@ -376,8 +379,8 @@ export class StudyPlannerAgentService {
         ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
           ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
           : {}),
-        buildDirective(context, personalization) {
-          brief = createPlanningBrief(context, { mode: "create", ...parsed.data }, personalization);
+        buildDirective(context, personalization, adaptiveStrategy) {
+          brief = createPlanningBrief(context, { mode: "create", ...parsed.data }, personalization, adaptiveStrategy);
           if (brief.totalAvailableMinutes < 15) {
             throw new StudyPlannerAgentError("NO_AVAILABILITY");
           }
@@ -437,6 +440,7 @@ export class StudyPlannerAgentService {
       {
         agentId: "study-planner",
         request: parsed.data.request,
+        ...(parsed.data.conversation ? { conversation: parsed.data.conversation } : {}),
         ...(parsed.data.examId ? { examId: parsed.data.examId } : {}),
         ...(parsed.data.courseId ? { courseId: parsed.data.courseId } : {}),
         ...(parsed.data.documentIds ? { documentIds: parsed.data.documentIds } : {}),
@@ -449,9 +453,9 @@ export class StudyPlannerAgentService {
         ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
           ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
           : {}),
-        buildDirective(context, personalization) {
+        buildDirective(context, personalization, adaptiveStrategy) {
           const planningContext = retained.length ? { ...context, assignments: context.assignments?.filter((assignment) => !retained.some((task) => task.assignmentId === assignment.id)) } : context;
-          const initial = createPlanningBrief(planningContext, { mode: "update", ...parsed.data }, personalization);
+          const initial = createPlanningBrief(planningContext, { mode: "update", ...parsed.data }, personalization, adaptiveStrategy);
           const reservedMinutesByDate: Record<string, number> = {};
           for (const task of existing.tasks) {
             if (
@@ -467,7 +471,7 @@ export class StudyPlannerAgentService {
             mode: "update",
             ...parsed.data,
             reservedMinutesByDate,
-          }, personalization);
+          }, personalization, adaptiveStrategy);
           changes = calculatePlanningChanges(
             existing.tasks.map(currentTask),
             context,
@@ -565,6 +569,7 @@ export class StudyPlannerAgentService {
       {
         agentId: "study-planner",
         request: parsed.data.request,
+        ...(parsed.data.conversation ? { conversation: parsed.data.conversation } : {}),
         ...(parsed.data.courseId ? { courseId: parsed.data.courseId } : {}),
         ...(parsed.data.documentIds ? { documentIds: parsed.data.documentIds } : {}),
       },
@@ -576,8 +581,8 @@ export class StudyPlannerAgentService {
         ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
           ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
           : {}),
-        buildDirective(context, personalization) {
-          const base = createPlanningBrief(context, { mode: "now", ...parsed.data }, personalization);
+        buildDirective(context, personalization, adaptiveStrategy) {
+          const base = createPlanningBrief(context, { mode: "now", ...parsed.data }, personalization, adaptiveStrategy);
           const signals = [
             ...currentPlanSignals(currentTasks, base.startDate),
             ...base.signals,
@@ -634,6 +639,30 @@ export class StudyPlannerAgentService {
     return publicPlan(await this.loadOwnedPlan(planId, userId));
   }
 
+  /** Resolves the most recently updated active plan for natural-language
+   * workspace replanning without trusting a client-supplied user identity. */
+  async getCurrentPlan(
+    requestHeaders: Headers,
+    courseId?: string,
+  ): Promise<StoredStudyPlan | undefined> {
+    const { userId } = await this.authenticate(requestHeaders);
+    const plan = await db().studyPlan.findFirst({
+      where: {
+        userId,
+        status: "ACTIVE",
+        ...(courseId ? { tasks: { some: { userId, courseId } } } : {}),
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+      include: {
+        tasks: {
+          include: { course: true },
+          orderBy: [{ date: "asc" }, { priority: "desc" }],
+        },
+      },
+    });
+    return plan ? publicPlan(plan as DatabasePlan) : undefined;
+  }
+
   async updateTaskStatus(
     taskId: string,
     status: StudyTaskStatus,
@@ -648,7 +677,7 @@ export class StudyPlannerAgentService {
       const outcome = await db().$transaction(async (transaction) => {
         const task = await transaction.studyTask.findFirst({
           where: { id: taskId, userId, studyPlan: { userId } },
-          select: { studyPlanId: true, durationMinutes: true },
+          select: { studyPlanId: true, durationMinutes: true, courseId: true, topicId: true },
         });
         if (!task) throw new StudyPlannerAgentError("TASK_NOT_FOUND");
         await transaction.studyTask.update({
@@ -678,7 +707,12 @@ export class StudyPlannerAgentService {
             totalPlannedMinutes: total._sum.durationMinutes ?? 0,
           },
         });
-        return { planId: task.studyPlanId, durationMinutes: task.durationMinutes };
+        return {
+          planId: task.studyPlanId,
+          durationMinutes: task.durationMinutes,
+          courseId: task.courseId,
+          topicId: task.topicId,
+        };
       });
       if (parsed.data === "completed" || parsed.data === "skipped") {
         try {
@@ -688,10 +722,25 @@ export class StudyPlannerAgentService {
             durationMinutes: outcome.durationMinutes,
             status: parsed.data,
           });
+          await recordAdaptiveOutcome({
+            userId,
+            agentId: "study-planner",
+            ...(outcome.courseId ? { courseId: outcome.courseId } : {}),
+            ...(outcome.topicId ? { topicId: outcome.topicId } : {}),
+            strategyKey: `study-session:${outcome.durationMinutes}`,
+            strategy: { recommendedSessionMinutes: outcome.durationMinutes },
+            outcomeType:
+              parsed.data === "completed"
+                ? "study-task-completed"
+                : "study-task-skipped",
+            successful: parsed.data === "completed",
+            evidenceKey: `study-task:${taskId}:${parsed.data}`,
+          });
         } catch {
           // Personalization evidence is optional and must never make a valid
           // study-task update fail.
         }
+        await refreshRecommendationsBestEffort(userId);
       }
       return publicPlan(await this.loadOwnedPlan(outcome.planId, userId));
     } catch (error) {

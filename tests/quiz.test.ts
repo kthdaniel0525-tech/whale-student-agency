@@ -563,6 +563,32 @@ describe.sequential("owned quiz retrieval and answer grading", () => {
     expect(boundary.getProvider).not.toHaveBeenCalled();
   });
 
+  it("deepens feedback after the same concept is missed repeatedly", async () => {
+    const generated = quizData(1, "multiple-choice");
+    generated.topic = `Repeated Feedback ${randomUUID()}`;
+    generated.questions[0].topics = [generated.topic];
+    const boundary = setup(generated);
+    const quiz = await boundary.service.generateQuiz(
+      {
+        request: "Give me one multiple-choice induction question",
+        count: 1,
+        questionType: "multiple-choice",
+        courseId,
+      },
+      owner.headers,
+    );
+    const answer = {
+      quizId: quiz.id,
+      questionId: quiz.questions[0].id,
+      userAnswer: "Distractor B 1",
+    };
+    const first = await boundary.service.evaluateAnswer(answer, owner.headers);
+    const repeated = await boundary.service.evaluateAnswer(answer, owner.headers);
+    expect(first.feedback).not.toContain("missed repeatedly");
+    expect(repeated.feedback).toContain("missed repeatedly");
+    expect(repeated.feedback).toContain("use Tutor");
+  });
+
   it("maps generated questions to learning topics and records objective progress", async () => {
     const generated = quizData(1, "multiple-choice");
     generated.topic = "Learning Pipeline Topic";

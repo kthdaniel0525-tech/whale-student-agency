@@ -5,6 +5,8 @@ import type { AIProvider } from "../ai/types";
 import { AgentRouter } from "../agents/router";
 import { createStudentAgentRegistry, createStudentAgentService } from "../agents/student-service";
 import { STUDENT_AGENT_IDS, type StudentAgentId } from "../agents/types";
+import { createQuizAgentService } from "../agents/quiz";
+import { createStudyPlannerAgentService } from "../agents/study-planner";
 import { createStudentWorkflowRegistry, WORKFLOW_IDS, WorkflowService } from "../workflows";
 import { WorkflowError } from "../workflows/errors";
 import type { WorkflowId, WorkflowInput } from "../workflows/types";
@@ -20,7 +22,7 @@ import type { DispatchDecision, DispatcherInput, DispatchTargetDecision, Unified
 const id = z.string().min(1).max(100);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const dispatcherInputSchema = z.object({
-  request: z.string().trim().min(1).max(4000), courseId: id.optional(), examId: id.optional(), assignmentId: id.optional(),
+  request: z.string().trim().min(1).max(4000), conversationId: id.optional(), turnId: id.optional(), courseId: id.optional(), examId: id.optional(), assignmentId: id.optional(),
   documentId: id.optional(), documentIds: z.array(id).min(1).max(10).transform((ids) => [...new Set(ids)]).optional(),
   topicId: id.optional(), topicName: z.string().trim().min(1).max(120).optional(), projectIds: z.array(id).min(1).max(10).transform((ids) => [...new Set(ids)]).optional(),
   preferredAgentId: id.optional(), preferredWorkflowId: id.optional(), studyPlanId: id.optional(), quizId: id.optional(),
@@ -32,6 +34,7 @@ export const dispatcherInputSchema = z.object({
   targetCompanies: z.array(z.string().trim().min(1).max(120)).max(10).optional(), applicationTimeline: z.string().trim().min(1).max(100).optional(),
   resumeData: z.string().trim().min(1).max(5000).optional(), availableWeeklyMinutes: z.number().int().min(30).max(2400).optional(), availableWeeklyHours: z.number().min(.5).max(40).optional(),
 }).strict().superRefine((value, context) => {
+  if (value.turnId && !value.conversationId) context.addIssue({ code: "custom", path: ["turnId"], message: "A turn requires a conversation." });
   if (value.preferredAgentId && value.preferredWorkflowId) context.addIssue({ code: "custom", path: ["preferredAgentId"], message: "Choose one explicit target." });
   if (value.documentId && value.documentIds) context.addIssue({ code: "custom", path: ["documentId"], message: "Use one document selection form." });
   if (value.availability && new Set(value.availability.map((item) => item.date)).size !== value.availability.length) context.addIssue({ code: "custom", path: ["availability"], message: "Availability dates must be unique." });
@@ -122,11 +125,55 @@ export class IntelligentDispatcher {
       if (missing) return { needsClarification: true as const, confidence: decision.confidence, method: decision.method, reason: "The selected workflow needs one resource selection before it can start.", clarificationQuestion: missing, suggestedTarget: { targetType: decision.targetType, targetId: decision.targetId }, metrics: metrics(true) };
       if (decision.targetType === "agent") {
         const target = this.#agents.get(decision.targetId);
+        const conversation = input.conversationId ? { id: input.conversationId } : undefined;
+        if (decision.targetId === "quiz") {
+          const quiz = await createQuizAgentService({ getProvider, executor: { getProvider } }).generateQuiz({
+            request: input.request,
+            ...(conversation ? { conversation } : {}),
+            ...(input.courseId ? { courseId: input.courseId } : {}),
+            ...(this.documents(input).length ? { documentIds: this.documents(input) } : {}),
+            ...(input.topicName ? { topic: input.topicName } : {}),
+          }, headers);
+          return { needsClarification: false as const, mode: "agent" as const, target: { id: target.id, name: target.name }, dispatch: { confidence: decision.confidence, method: decision.method, reason: decision.reason }, result: {
+            ok: true as const, agent: { id: target.id, name: target.name }, routing: { agentId: target.id, confidence: decision.confidence, method: decision.method === "default" ? "default" as const : "rule" as const },
+            response: { content: `Created ${quiz.questions.length} questions for ${quiz.title}.`, sources: quiz.sources, structuredData: quiz },
+            metadata: { ...quiz.metadata, totalDurationMs: Math.round(performance.now() - executionStarted) },
+          }, metrics: metrics(true) };
+        }
+        if (decision.targetId === "study-planner") {
+          const planner = createStudyPlannerAgentService({ executor: { getProvider }, router: { allowedAgentIds: ["study-planner"] } });
+          const scope = {
+            request: input.request,
+            ...(conversation ? { conversation } : {}),
+            ...(input.courseId ? { courseId: input.courseId } : {}),
+            ...(input.examId ? { examId: input.examId } : {}),
+            ...(this.documents(input).length ? { documentIds: this.documents(input) } : {}),
+          };
+          const nowRequest = /\b(?:right now|today|tonight|what should i (?:study|do) next)\b|지금|오늘|오늘밤/i.test(input.request);
+          const updateRequest = /\b(?:update|adjust|rebalance|reschedule|missed)\b|업데이트|조정|빠뜨|놓쳤/i.test(input.request);
+          const currentPlan = !input.studyPlanId && updateRequest
+            ? await planner.getCurrentPlan(headers, input.courseId)
+            : undefined;
+          const planId = input.studyPlanId ?? currentPlan?.id;
+          const plan = planId
+            ? await planner.updatePlan({ ...scope, planId, availability: input.availability }, headers)
+            : nowRequest
+              ? await planner.recommendNow({ ...scope, availableMinutes: input.availableMinutes }, headers)
+              : await planner.createPlan({ ...scope, availability: input.availability }, headers);
+          const content = "days" in plan
+            ? `${plan.title}\n\n${plan.summary}`
+            : `${plan.summary}\n\n${plan.sessions.map((session) => `${session.title} · ${session.durationMinutes} minutes`).join("\n")}`;
+          return { needsClarification: false as const, mode: "agent" as const, target: { id: target.id, name: target.name }, dispatch: { confidence: decision.confidence, method: decision.method, reason: decision.reason }, result: {
+            ok: true as const, agent: { id: target.id, name: target.name }, routing: { agentId: target.id, confidence: decision.confidence, method: decision.method === "default" ? "default" as const : "rule" as const },
+            response: { content, sources: [], structuredData: plan },
+            metadata: { ...("metadata" in plan ? plan.metadata : {}), totalDurationMs: Math.round(performance.now() - executionStarted) },
+          }, metrics: metrics(true) };
+        }
         const service = createStudentAgentService({ router: { getProvider }, executor: { getProvider } });
         const result = await service.handleAgentRequest({ request: input.request, preferredAgentId: decision.targetId,
           ...(input.courseId ? { courseId: input.courseId } : {}), ...(input.examId ? { examId: input.examId } : {}),
           ...(input.assignmentId ? { assignmentId: input.assignmentId } : {}), ...(input.projectIds ? { projectIds: input.projectIds } : {}),
-          ...(this.documents(input).length ? { documentIds: this.documents(input) } : {}) }, headers);
+          ...(this.documents(input).length ? { documentIds: this.documents(input) } : {}), ...(conversation ? { conversation } : {}) }, headers);
         return { needsClarification: false as const, mode: "agent" as const, target: { id: target.id, name: target.name }, dispatch: { confidence: decision.confidence, method: decision.method, reason: decision.reason }, result, metrics: metrics(result.ok) };
       }
       const target = this.#workflows.get(decision.targetId);
@@ -201,7 +248,7 @@ export class IntelligentDispatcher {
 
   private workflowInput(id: WorkflowId, input: z.infer<typeof dispatcherInputSchema>): WorkflowInput {
     if (input.request.length > 1000) throw new DispatcherError("INVALID_REQUEST");
-    const common = { goal: input.request, ...(input.courseId ? { courseId: input.courseId } : {}) };
+    const common = { goal: input.request, ...(input.conversationId ? { conversationId: input.conversationId } : {}), ...(input.courseId ? { courseId: input.courseId } : {}) };
     switch (id) {
       case "exam-preparation": return { workflowId: id, ...common, examId: input.examId, studyPlanId: input.studyPlanId, quizId: input.quizId, documentIds: this.documents(input).length ? this.documents(input) : undefined, availability: input.availability };
       case "weak-topic-recovery": return { workflowId: id, ...common, topicId: input.topicId, topicName: input.topicName, review: input.review, documentIds: this.documents(input).length ? this.documents(input) : undefined };

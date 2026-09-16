@@ -17,6 +17,7 @@ import type { StepInput, StepOutput, WorkflowContext, WorkflowStep } from "./typ
 const id = z.string().min(1).max(100);
 export const recoveryInputSchema = z.object({
   workflowId: z.literal("weak-topic-recovery"), goal: z.string().trim().min(3).max(1000),
+  conversationId: id.optional(),
   courseId: id.optional(), topicId: id.optional(), topicName: z.string().trim().min(1).max(120).optional(), review: z.boolean().optional(),
   documentIds: z.array(id).min(1).max(10).optional(),
 }).strict();
@@ -53,7 +54,7 @@ export async function initialRecoveryContext(input: z.infer<typeof recoveryInput
   catch (error) { if (error instanceof NotFoundError) throw new WorkflowError("REFERENCE_NOT_FOUND"); throw error; }
   const snapshot = recoverySnapshot(selected);
   const entry = recoveryEntry(snapshot, input.review || /\breview\b|복습/i.test(input.goal));
-  return { goal: input.goal, courseId: selected.courseId, documentIds: input.documentIds,
+  return { goal: input.goal, conversationId: input.conversationId, courseId: selected.courseId, documentIds: input.documentIds,
     priorities: [], topics: [], studyPlanId: null, planCurrent: false, quizId: null, quizCurrent: false,
     quizMode: entry === "diagnostic" ? "diagnostic" : "practice", tutorTopic: selected.topic, targetTopics: [selected.topic], previousStepSummaries: [],
     recovery: { topicId: selected.id, topicName: selected.topic, courseId: selected.courseId,
@@ -105,7 +106,8 @@ export class RecoveryWorkflowAdapter {
     if (!owned) throw new WorkflowError("TOPIC_NOT_FOUND");
     if (step.agentId === "tutor") {
       if (state.tutorAttempts >= RECOVERY_CONFIG.maxTutorCalls) throw new WorkflowError("LIMIT_EXCEEDED");
-      const result = await this.core.handleAgentRequest({ request: input.request, preferredAgentId: "tutor", courseId: state.courseId, documentIds: context.documentIds }, headers);
+      const result = await this.core.handleAgentRequest({ request: input.request, preferredAgentId: "tutor", courseId: state.courseId, documentIds: context.documentIds,
+        ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers);
       if (!result.ok) throw new WorkflowError(result.error.code as import("./errors").WorkflowErrorCode);
       state.tutorAttempts++;
       return { summary: `Explained ${state.topicName} using ${state.tutorAttempts === 1 ? "targeted instruction" : "an alternative approach"}.`, patch: { recovery: state }, data: { topic: state.topicName, explanation: result.response.content.slice(0, 6000), sources: result.response.sources.slice(0, 5), truncated: result.response.content.length > 6000 } };
@@ -114,7 +116,8 @@ export class RecoveryWorkflowAdapter {
       if (state.quizAttempts >= RECOVERY_CONFIG.maxQuizCalls) throw new WorkflowError("LIMIT_EXCEEDED");
       const settings = recoveryQuizSettings(state);
       const generated = await this.quiz.generateQuiz({ request: input.request, courseId: state.courseId, topic: state.topicName,
-        count: settings.count, difficulty: settings.difficulty, questionType: "mixed", documentIds: context.documentIds }, headers);
+        count: settings.count, difficulty: settings.difficulty, questionType: "mixed", documentIds: context.documentIds,
+        ...(context.conversationId ? { conversation: { id: context.conversationId } } : {}) }, headers);
       if (generated.courseId !== state.courseId || generated.questions.some((q) => !q.topics.some((t) => normalizeTopicName(t) === normalizeTopicName(state.topicName)))) throw new WorkflowError("INVALID_RESPONSE");
       state.quizAttempts++;
       state.quizzes.push({ id: generated.id, mode: settings.mode, difficulty: settings.difficulty, attemptId: null });

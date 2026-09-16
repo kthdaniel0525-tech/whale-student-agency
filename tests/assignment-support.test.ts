@@ -16,6 +16,7 @@ import { createStudentAgentRegistry, createStudentAgentService } from "@/server/
 import { embeddingProvider } from "@/server/documents/embeddings";
 import * as retrieval from "@/server/documents/retrieval";
 import { buildUserContext } from "@/server/context/builder";
+import { createConversation, getConversation } from "@/server/conversations";
 const instructions = "Prove the sum formula using mathematical induction. Include a base case. Explain the inductive step. Submit one PDF. Do not assume the conclusion in your hypothesis.";
 const passage = "Mathematical Induction proves a formula using a base case and an inductive step. The inductive hypothesis assumes P(k), then derive P(k+1). The sum formula follows by adding the next term. Recursion uses a base case and a smaller instance.";
 const analysis: AssignmentAnalysis = {
@@ -60,7 +61,7 @@ function boundary(options: { fail?: string; analysis?: AssignmentAnalysis; inval
       return { id: "assignment-fixture", model: "fixture", text: JSON.stringify(data), data: data as T };
     }, generateText() { throw new Error("Structured existing-agent execution expected."); }, streamText() { throw new Error("No new stream pipeline."); }, generateEmbedding() { throw new Error("Use existing local RAG."); },
   };
-  return { calls, requests, provider, service: new WorkflowService({ getProvider: () => provider }) };
+  return { calls, requests, provider, service: new WorkflowService({ getProvider: () => provider, conversationEmbeddingProvider: null }) };
 }
 async function saved(id: string) { return (await db().workflowRun.findUniqueOrThrow({ where: { id } })).context as unknown as WorkflowContext; }
 beforeAll(async () => { owner = await actor(); other = await actor(); vector = JSON.stringify(await embeddingProvider.generateEmbedding(passage)); });
@@ -140,6 +141,33 @@ describe.sequential("Assignment Support through real auth, database, context and
     expect(plan.preparationMinutes).toBe(15); expect(plan.totalMinutes).toBeLessThanOrEqual(90);
     const done = await ai.service.resumeWorkflow({ runId: run.runId, userWork: "I established the base case and assumed P(k)." }, owner.headers);
     expect(done.status).toBe("completed"); expect(ai.calls).toEqual(["assignment_analysis", "assignment_guidance", "assignment_feedback"]);
+  });
+  it("persists the conversation across draft waiting and resumes from workflow state", async () => {
+    const f = await fixture(), ai = boundary();
+    const conversation = await createConversation({ courseId: f.course.id }, owner.headers);
+    const waiting = await ai.service.runWorkflow({
+      ...f.input,
+      goal: "Help me with this assignment.",
+      availableMinutes: 90,
+      conversationId: conversation.id,
+    }, owner.headers);
+    expect(waiting).toMatchObject({ status: "waiting-for-input", waitingFor: { kind: "student-work" } });
+    const waitingContext = await saved(waiting.runId);
+    expect(waitingContext).toMatchObject({
+      conversationId: conversation.id,
+      waitingFor: waiting.waitingFor,
+    });
+    expect(waitingContext.assignment?.userWork).toBeUndefined();
+    const userWork = "I established the base case and assumed P(k).";
+    const resumed = await new WorkflowService({
+      getProvider: () => ai.provider,
+      conversationEmbeddingProvider: null,
+    }).resumeWorkflow({ runId: waiting.runId, userWork }, owner.headers);
+    expect(resumed.status).toBe("completed");
+    expect((await saved(waiting.runId)).assignment?.userWork).toBe(userWork);
+    const messages = (await getConversation(conversation.id, owner.headers, 100)).messages;
+    expect(messages.some((message) => message.content === userWork)).toBe(true);
+    expect(messages.some((message) => message.agentId === "tutor")).toBe(true);
   });
   it("retrieves only selected documents and preserves real page sources", async () => {
     const f = await fixture(), selected = await document(f), unused = await document(f, "UNSELECTED_SECRET"), ai = boundary();

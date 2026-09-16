@@ -36,7 +36,8 @@ for ADVANCED. Program/year and available learning context are used only when use
 the model is instructed not to repeat the profile or invent weak topics. The
 explanation/example/takeaway structure is a suggestion, not a fixed response form.
 Vague questions without a concept or attempted answer call for clarification;
-there is no implicit access to previous conversation messages.
+when an owned conversation ID is supplied, shared recent/summary/retrieval context
+can resolve follow-up references without Tutor-specific storage.
 
 Course-specific requests prioritize the retrieved course framing and distinguish
 it from general knowledge, including where those accounts differ. If requested
@@ -61,9 +62,9 @@ Sources describe the material supplied to the model; they do not independently
 verify every generated claim. Tutor instructions permit only supplied source titles
 and pages and never contain fabricated document/page examples.
 
-Other agents are configured separately through the same Student setup. This Tutor
-module adds no other agent behavior, persistent conversation, chat UI, workflows,
-or new model/environment configuration.
+Other agents are configured separately through the same Student setup. Conversation
+continuity is provided by the shared Executor layer; this Tutor module adds no
+agent-specific history store, chat UI, workflows, or model configuration.
 
 ## Verification
 

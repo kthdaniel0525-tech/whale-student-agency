@@ -6,7 +6,10 @@ function value<T>(input: PersonalizedValue<T> | undefined): T | undefined {
 }
 
 /** Compact behavior guidance. Source/conflict metadata stays server-side. */
-export function formatPersonalizationForAI(profile: PersonalizationProfile): string {
+export function formatPersonalizationForAI(
+  profile: PersonalizationProfile,
+  options: { omitResolvedBehavior?: boolean } = {},
+): string {
   const sections: string[] = [];
   const explanation = {
     style: value(profile.explanationStyle),
@@ -47,11 +50,19 @@ export function formatPersonalizationForAI(profile: PersonalizationProfile): str
     ));
     if (Object.keys(compact).length) sections.push(`${label}=${JSON.stringify(compact)}`);
   };
-  add("explanation", explanation);
-  add("quiz", quiz);
-  add("learning", learning);
-  add("study", study);
-  add("notes", notes);
+  if (!options.omitResolvedBehavior) {
+    add("explanation", explanation);
+    add("quiz", quiz);
+    add("learning", learning);
+    add("study", study);
+    add("notes", notes);
+  } else {
+    add("study-background", {
+      preferredTime: study.preferredTime,
+      strategies: study.strategies,
+      goals: study.goals,
+    });
+  }
   if (career && Object.keys(career).length) sections.push(`career=${JSON.stringify(career)}`);
   if (communication?.length) sections.push(`communication=${JSON.stringify(communication)}`);
   return sections.length ? `[PERSONALIZATION]\n${sections.join("\n")}` : "";

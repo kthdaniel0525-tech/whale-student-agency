@@ -35,6 +35,7 @@ export interface StudyAvailability {
 export interface StudyPlanRequest {
   readonly examId?: string;
   readonly request: string;
+  readonly conversation?: { readonly id: string; readonly turnId?: string };
   readonly courseId?: string;
   readonly documentIds?: readonly string[];
   readonly startDate?: string;
@@ -50,6 +51,7 @@ export interface StudyPlanUpdateRequest extends StudyPlanRequest {
 
 export interface StudyNowRequest {
   readonly request: string;
+  readonly conversation?: { readonly id: string; readonly turnId?: string };
   readonly courseId?: string;
   readonly documentIds?: readonly string[];
   readonly availableMinutes?: number;

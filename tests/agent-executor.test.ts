@@ -20,9 +20,27 @@ import type {
   UserContext,
 } from "../server/context/types";
 
+const conversationBoundary = vi.hoisted(() => ({
+  getScope: vi.fn(),
+  buildContext: vi.fn(),
+  appendMessage: vi.fn(),
+}));
+
 // Only data/auth and AI boundaries are mocked. Shared validators, formatter,
 // registry, prompt construction, source handling and executor run normally.
 vi.mock("../server/context/builder", () => ({ buildUserContext: vi.fn() }));
+vi.mock("../server/conversations", () => ({
+  ConversationError: class ConversationError extends Error {
+    constructor(readonly code: string) {
+      super(code);
+    }
+  },
+  getConversationScope: conversationBoundary.getScope,
+  buildConversationContext: conversationBoundary.buildContext,
+  appendConversationMessage: conversationBoundary.appendMessage,
+  formatConversationForAI: () =>
+    "[CONVERSATION SUMMARY]\nCurrent goal: study induction.\n\n[RECENT CONVERSATION]\nUser: \"Make the next example harder.\"",
+}));
 const buildContext = vi.mocked(buildUserContext);
 const headers = new Headers({ cookie: "test-session-cookie" });
 const reference = "REFERENCE ONLY: induction assumes P(k) and proves P(k+1).";
@@ -166,6 +184,29 @@ beforeEach(() => {
     );
     return context(data, categories);
   });
+  conversationBoundary.getScope.mockReset();
+  conversationBoundary.buildContext.mockReset();
+  conversationBoundary.appendMessage.mockReset();
+  conversationBoundary.getScope.mockResolvedValue({
+    id: "PRIVATE CONVERSATION",
+    courseId: "course-1",
+  });
+  conversationBoundary.buildContext.mockResolvedValue({
+    conversationId: "PRIVATE CONVERSATION",
+    courseId: "course-1",
+    recentMessages: [],
+    relevantHistoricalMessages: [],
+    metadata: {
+      recentMessagesUsed: 1,
+      historicalMessagesUsed: 0,
+      summaryUsed: true,
+      estimatedConversationTokens: 42,
+      compressionTriggered: false,
+      targetConversationTokens: 2800,
+      totalAssembledContextEstimate: 1942,
+    },
+  });
+  conversationBoundary.appendMessage.mockResolvedValue({ id: "message-1" });
 });
 
 describe("AgentExecutor pipeline", () => {
@@ -182,7 +223,7 @@ describe("AgentExecutor pipeline", () => {
       metadata: {
         model: "test-model",
         usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
-        contextCategories: ["course", "documents", "memories"],
+        contextCategories: ["course", "exams", "documents", "memories"],
       },
     });
     expectTypeOf(result).toEqualTypeOf<AgentExecutionResult<unknown, never>>();
@@ -190,6 +231,65 @@ describe("AgentExecutor pipeline", () => {
     expect(buildContext).toHaveBeenCalledTimes(1);
     expect(ai.getProvider).toHaveBeenCalledTimes(1);
     expect(ai.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams text through the provider boundary and returns the persisted final result", async () => {
+    const streamText = vi.fn<AIProvider["streamText"]>(async function* () {
+      yield { type: "text-delta" as const, text: "Generated " };
+      yield { type: "text-delta" as const, text: "response." };
+      yield {
+        type: "complete" as const,
+        response: {
+          id: "provider-stream-id",
+          model: "test-stream-model",
+          text: "Generated response.",
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        },
+      };
+    });
+    const provider: AIProvider = {
+      generateText: vi.fn(() => Promise.reject(new Error("Text boundary must not run."))),
+      generateStructuredOutput: vi.fn(() => Promise.reject(new Error("Structured boundary must not run."))),
+      streamText,
+      generateEmbedding: vi.fn(() => Promise.reject(new Error("Embedding boundary must not run."))),
+    };
+    const executor = new AgentExecutor(registry(), { getProvider: () => provider });
+    const iterator = executor.stream(
+      {
+        agentId: "notes",
+        request: "Stream notes",
+        conversation: { id: "PRIVATE CONVERSATION", turnId: "STREAM TURN" },
+      },
+      headers,
+    );
+    const deltas: string[] = [];
+    let result: AgentExecutionResult | undefined;
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) {
+        result = next.value;
+        break;
+      }
+      deltas.push(next.value.text);
+    }
+
+    expect(deltas).toEqual(["Generated ", "response."]);
+    expect(result).toMatchObject({
+      agentId: "notes",
+      content: "Generated response.",
+      metadata: { model: "test-stream-model" },
+    });
+    expect(streamText).toHaveBeenCalledTimes(1);
+    expect(conversationBoundary.appendMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        role: "assistant",
+        content: "Generated response.",
+        turnId: "STREAM TURN",
+      }),
+      expect.any(Headers),
+      expect.any(Object),
+    );
   });
 
   it("passes exact registry requirements, scope, request, and server headers to Context Builder", async () => {
@@ -252,14 +352,16 @@ describe("AgentExecutor pipeline", () => {
       "Relevant reference data:\n" +
         formatContextForAI(built, { omitPersonalizationSignals: true }),
     );
-    expect(messages[1].content).toContain("[PERSONALIZATION]");
+    expect(messages[0].content).toContain("[ADAPTATION]");
+    expect(messages[1].content).not.toContain("[PERSONALIZATION]");
     expect(messages[2]).toEqual({
       role: "user",
       content: "Explain mathematical induction",
     });
     expect(JSON.stringify(messages)).not.toMatch(
-      /PRIVATE ASSIGNMENT|PRIVATE EXAM|Fixture Student/,
+      /PRIVATE ASSIGNMENT|Fixture Student/,
     );
+    expect(messages[1].content).toContain("PRIVATE EXAM");
     expect(JSON.stringify(messages)).not.toMatch(/\[PREFERENCES\]|improve_grades/);
     expect(result.agentId).toBe("notes"); // Selection is never rerouted to Tutor.
     expect(ai.generate.mock.calls[0][0]).toEqual({ messages });
@@ -316,7 +418,7 @@ describe("AgentExecutor pipeline", () => {
     expect(JSON.stringify(agents.list())).not.toContain("Use short sentences");
   });
 
-  it("does not forward optional conversation IDs or load conversation history", async () => {
+  it("loads bounded conversation context and persists both visible sides of the turn", async () => {
     const ai = aiBoundary();
     const executor = new AgentExecutor(registry(), ai);
     const result = await executor.execute(
@@ -327,15 +429,52 @@ describe("AgentExecutor pipeline", () => {
       },
       headers,
     );
-    expect(JSON.stringify(ai.generate.mock.calls)).not.toMatch(
-      /PRIVATE CONVERSATION|PRIVATE TURN/,
+    expect(JSON.stringify(ai.generate.mock.calls)).toContain(
+      "Make the next example harder",
     );
     expect(JSON.stringify(buildContext.mock.calls[0][0])).not.toContain(
       "conversation",
     );
-    expect(JSON.stringify(result)).not.toMatch(
-      /PRIVATE CONVERSATION|PRIVATE TURN/,
+    expect(conversationBoundary.getScope).toHaveBeenCalledWith(
+      "PRIVATE CONVERSATION",
+      headers,
     );
+    expect(conversationBoundary.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "PRIVATE CONVERSATION",
+        expectedCourseId: "course-1",
+      }),
+      headers,
+      expect.objectContaining({ agentId: "notes" }),
+    );
+    expect(conversationBoundary.appendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        role: "user",
+        content: "Hello",
+        turnId: "PRIVATE TURN",
+      }),
+      headers,
+      expect.any(Object),
+    );
+    expect(conversationBoundary.appendMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        role: "assistant",
+        content: "Generated response.",
+        turnId: "PRIVATE TURN",
+        agentId: "notes",
+      }),
+      expect.any(Headers),
+      expect.any(Object),
+    );
+    expect(result.metadata).toMatchObject({
+      conversationId: "PRIVATE CONVERSATION",
+      conversationTurnId: "PRIVATE TURN",
+      recentMessagesUsed: 1,
+      summaryUsed: true,
+      estimatedConversationTokens: 42,
+    });
   });
 
   it("reports categories with actual data and never returns raw context or identity", async () => {

@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AIError } from "../../ai/errors";
 import type { AIProvider, AIUsage } from "../../ai/types";
@@ -16,6 +17,7 @@ import type {
   AgentExecutionResult,
   AgentId,
 } from "../types";
+import { STUDENT_AGENT_IDS, type StudentAgentId } from "../types";
 import { buildExecutionPrompt } from "./prompt";
 import { collectExecutionSources } from "./sources";
 import type {
@@ -29,6 +31,18 @@ import {
   buildPersonalizationProfile,
   type PersonalizationProfile,
 } from "../../personalization";
+import {
+  ConversationError,
+  appendConversationMessage,
+  buildConversationContext,
+  getConversationScope,
+  type ConversationContext,
+} from "../../conversations";
+import {
+  prepareAdaptiveStrategy,
+  recordAdaptiveExecution,
+  type AdaptiveStrategy,
+} from "../../adaptive";
 
 // Reuse existing request/scope constraints. Full options and RAG query validation
 // still run inside Context Builder after requirements are taken from the registry.
@@ -65,6 +79,10 @@ const errorMessages: Record<AgentExecutionErrorCode, string> = {
     "Execution instructions must be nonblank and at most 1000 characters.",
   UNKNOWN_AGENT: "The selected agent is not registered.",
   UNAUTHENTICATED: "Sign in to execute an agent request.",
+  CONVERSATION_NOT_FOUND:
+    "The selected conversation was not found for this account and scope.",
+  CONVERSATION_FAILURE:
+    "Conversation context could not be prepared or saved. Try again.",
   CONTEXT_FAILURE:
     "The requested context could not be prepared. Check your access and try again.",
   SOURCE_CONTEXT_UNAVAILABLE:
@@ -91,6 +109,16 @@ type PreparedExecution<Extension extends string> = {
   contextCategories: UserContext["metadata"]["requestedCategories"];
   contextCharacters: number;
   contextEstimatedTokens: number;
+  conversationContext?: ConversationContext;
+  conversationWrite?: {
+    id: string;
+    turnId: string;
+  };
+  adaptiveStrategy: AdaptiveStrategy;
+  adaptiveUserId?: string;
+  adaptiveEvidenceKey: string;
+  request: string;
+  requestHeaders: Headers;
 };
 
 function mergeContextOptions(
@@ -122,6 +150,7 @@ export class AgentExecutor<Extension extends string = never> {
   readonly #contextCache: AgentExecutorOptions["contextCache"];
   readonly #instructions: ReadonlyMap<string, string>;
   readonly #getProvider: () => AIProvider | Promise<AIProvider>;
+  readonly #conversationEmbeddingProvider: AgentExecutorOptions["conversationEmbeddingProvider"];
 
   constructor(
     private readonly registry: AgentRegistry<Extension>,
@@ -135,21 +164,56 @@ export class AgentExecutor<Extension extends string = never> {
     this.#instructions = new Map(Object.entries(instructions.data));
     this.#getProvider = options.getProvider ?? defaultProvider;
     this.#contextCache = options.contextCache;
+    this.#conversationEmbeddingProvider = options.conversationEmbeddingProvider;
   }
 
   async execute(
     input: AgentExecutionRequest<Extension>,
     requestHeaders: Headers,
   ): Promise<AgentExecutionResult<unknown, Extension>> {
-    const prepared = await this.prepare(input, requestHeaders);
+    let providerPromise: Promise<AIProvider> | undefined;
+    const getProvider = () =>
+      (providerPromise ??= Promise.resolve(this.#getProvider()));
+    const prepared = await this.prepare(input, requestHeaders, undefined, getProvider);
     try {
-      const provider = await this.#getProvider();
+      const provider = await getProvider();
       const response = responseSchema.safeParse(
         await provider.generateText({ messages: prepared.messages }),
       );
       if (!response.success) throw new AIError("INVALID_RESPONSE");
+      await this.persistAssistant(prepared, response.data.text);
+      await this.persistAdaptiveOutcome(prepared);
       return this.result(prepared, response.data.text, response.data);
     } catch (error) {
+      if (error instanceof AgentExecutionError) throw error;
+      throw this.providerError(error);
+    }
+  }
+
+  /** Streams ordinary text responses while preserving the same authenticated
+   * Context Builder, conversation, persistence, and adaptation boundaries. */
+  async *stream(
+    input: AgentExecutionRequest<Extension>,
+    requestHeaders: Headers,
+  ): AsyncGenerator<{ type: "text-delta"; text: string }, AgentExecutionResult<unknown, Extension>> {
+    let providerPromise: Promise<AIProvider> | undefined;
+    const getProvider = () =>
+      (providerPromise ??= Promise.resolve(this.#getProvider()));
+    const prepared = await this.prepare(input, requestHeaders, undefined, getProvider);
+    try {
+      const provider = await getProvider();
+      let completed: unknown;
+      for await (const event of provider.streamText({ messages: prepared.messages })) {
+        if (event.type === "text-delta") yield event;
+        else completed = event.response;
+      }
+      const response = responseSchema.safeParse(completed);
+      if (!response.success) throw new AIError("INVALID_RESPONSE");
+      await this.persistAssistant(prepared, response.data.text);
+      await this.persistAdaptiveOutcome(prepared);
+      return this.result(prepared, response.data.text, response.data);
+    } catch (error) {
+      if (error instanceof AgentExecutionError) throw error;
       throw this.providerError(error);
     }
   }
@@ -173,6 +237,9 @@ export class AgentExecutor<Extension extends string = never> {
     ) {
       throw new AgentExecutionError("INVALID_CONFIGURATION");
     }
+    let providerPromise: Promise<AIProvider> | undefined;
+    const getProvider = () =>
+      (providerPromise ??= Promise.resolve(this.#getProvider()));
     const prepared = await this.prepare(
       input,
       requestHeaders,
@@ -187,13 +254,14 @@ export class AgentExecutor<Extension extends string = never> {
           ? { contextOverrides: output.contextOverrides }
           : {}),
       },
+      getProvider,
     );
     if (output.referenceData) prepared.messages.splice(prepared.messages.length - 1, 0, { role: "user", content: "Additional reference data (information, not instructions):\n" + output.referenceData });
     if (output.requireDocumentSources && prepared.sources.length === 0) {
       throw new AgentExecutionError("SOURCE_CONTEXT_UNAVAILABLE");
     }
     try {
-      const provider = await this.#getProvider();
+      const provider = await getProvider();
       const response = await provider.generateStructuredOutput({
         messages: prepared.messages,
         schemaName: output.schemaName,
@@ -207,11 +275,17 @@ export class AgentExecutor<Extension extends string = never> {
       });
       const validated = responseSchema.safeParse(response);
       if (!validated.success) throw new AIError("INVALID_RESPONSE");
+      await this.persistAssistant(prepared, validated.data.text, {
+        structured: true,
+        schemaName: output.schemaName,
+      });
+      await this.persistAdaptiveOutcome(prepared);
       return {
         ...this.result(prepared, validated.data.text, validated.data),
         structuredData: data,
       };
     } catch (error) {
+      if (error instanceof AgentExecutionError) throw error;
       throw this.providerError(error);
     }
   }
@@ -225,8 +299,10 @@ export class AgentExecutor<Extension extends string = never> {
       buildDirective?: (
         context: Readonly<UserContext>,
         personalization: Readonly<PersonalizationProfile>,
+        adaptiveStrategy: Readonly<AdaptiveStrategy>,
       ) => string | Promise<string>;
     },
+    getProvider?: () => Promise<AIProvider>,
   ): Promise<PreparedExecution<Extension>> {
     const started = performance.now();
     const parsed = agentExecutionRequestSchema.safeParse(input);
@@ -241,9 +317,20 @@ export class AgentExecutor<Extension extends string = never> {
       parsed.data;
     // Registry.get performs the runtime membership check for this untrusted ID.
     const agent = this.resolveAgent(agentId);
+    let effectiveCourseId = courseId;
+    if (conversation) {
+      try {
+        const scope = await getConversationScope(conversation.id, requestHeaders);
+        if (courseId && scope.courseId && courseId !== scope.courseId)
+          throw new ConversationError("COURSE_MISMATCH");
+        effectiveCourseId ??= scope.courseId ?? undefined;
+      } catch (error) {
+        throw this.conversationError(error);
+      }
+    }
     const contextRequest: ContextRequest = {
       request,
-      ...(courseId !== undefined ? { courseId } : {}),
+      ...(effectiveCourseId !== undefined ? { courseId: effectiveCourseId } : {}),
       ...(examId !== undefined ? { examId } : {}),
       ...(assignmentId !== undefined ? { assignmentId } : {}),
       ...(projectIds !== undefined ? { projectIds } : {}),
@@ -264,21 +351,79 @@ export class AgentExecutor<Extension extends string = never> {
         error instanceof ContextError ? error.code : "CONTEXT_FAILURE",
       );
     }
+    let conversationContext: ConversationContext | undefined;
+    let conversationWrite: PreparedExecution<Extension>["conversationWrite"];
+    if (conversation) {
+      try {
+        conversationContext = await buildConversationContext(
+          {
+            conversationId: conversation.id,
+            query: request,
+            ...(effectiveCourseId ? { expectedCourseId: effectiveCourseId } : {}),
+          },
+          requestHeaders,
+          {
+            agentId: agent.id,
+            domainEstimatedTokens: context.metadata.estimatedTokens,
+            ...(getProvider ? { getProvider } : {}),
+            ...(this.#conversationEmbeddingProvider !== undefined
+              ? { embeddingProvider: this.#conversationEmbeddingProvider }
+              : {}),
+          },
+        );
+        const turnId = conversation.turnId ?? randomUUID();
+        await appendConversationMessage(
+          {
+            conversationId: conversation.id,
+            role: "user",
+            content: request,
+            turnId,
+            metadata: {
+              workspaceVisible: false,
+              agentId: agent.id,
+              ...(effectiveCourseId ? { courseId: effectiveCourseId } : {}),
+            },
+          },
+          requestHeaders,
+          this.#conversationEmbeddingProvider !== undefined
+            ? { embeddingProvider: this.#conversationEmbeddingProvider }
+            : {},
+        );
+        conversationWrite = { id: conversation.id, turnId };
+      } catch (error) {
+        throw this.conversationError(error);
+      }
+    }
     const prepared: AgentExecutionInput = {
       request,
       context,
       ...(conversation ? { conversation } : {}),
+      ...(conversationContext ? { conversationContext } : {}),
     };
     // Context Builder is the authentication/ownership boundary. The engine is a
     // pure, read-only resolver over that already-scoped context.
     const personalization = buildPersonalizationProfile({
       request,
       agentId: agent.id,
-      ...(courseId ? { courseId } : {}),
+      ...(effectiveCourseId ? { courseId: effectiveCourseId } : {}),
       context,
     });
+    const adaptive = await prepareAdaptiveStrategy(
+      {
+        agentId: agent.id,
+        request,
+        personalization,
+        context,
+        ...(conversationContext ? { conversationState: conversationContext } : {}),
+      },
+      requestHeaders,
+    );
     const directive = preparation?.buildDirective
-      ? await preparation.buildDirective(context, personalization)
+      ? await preparation.buildDirective(
+          context,
+          personalization,
+          adaptive.strategy,
+        )
       : preparation?.directive;
     if (
       directive !== undefined &&
@@ -292,6 +437,7 @@ export class AgentExecutor<Extension extends string = never> {
       this.#instructions.get(agent.id),
       directive,
       personalization,
+      adaptive.strategy,
     );
     const sources = collectExecutionSources(context);
     const contextCategories = context.metadata.requestedCategories.filter(
@@ -305,8 +451,10 @@ export class AgentExecutor<Extension extends string = never> {
       },
     );
     recordContextSize(
-      context.metadata.estimatedContextSize,
-      context.metadata.estimatedTokens,
+      context.metadata.estimatedContextSize +
+        (conversationContext?.metadata.estimatedConversationTokens ?? 0) * 4,
+      context.metadata.estimatedTokens +
+        (conversationContext?.metadata.estimatedConversationTokens ?? 0),
     );
 
     return {
@@ -317,6 +465,14 @@ export class AgentExecutor<Extension extends string = never> {
       contextCategories,
       contextCharacters: context.metadata.estimatedContextSize,
       contextEstimatedTokens: context.metadata.estimatedTokens,
+      ...(conversationContext ? { conversationContext } : {}),
+      ...(conversationWrite ? { conversationWrite } : {}),
+      adaptiveStrategy: adaptive.strategy,
+      ...(adaptive.userId ? { adaptiveUserId: adaptive.userId } : {}),
+      adaptiveEvidenceKey:
+        conversationWrite?.turnId ?? `execution:${randomUUID()}`,
+      request,
+      requestHeaders: new Headers(requestHeaders),
     };
   }
 
@@ -335,6 +491,29 @@ export class AgentExecutor<Extension extends string = never> {
         contextCategories: prepared.contextCategories,
         contextCharacters: prepared.contextCharacters,
         contextEstimatedTokens: prepared.contextEstimatedTokens,
+        ...(prepared.conversationContext
+          ? {
+              recentMessagesUsed:
+                prepared.conversationContext.metadata.recentMessagesUsed,
+              historicalMessagesUsed:
+                prepared.conversationContext.metadata.historicalMessagesUsed,
+              summaryUsed: prepared.conversationContext.metadata.summaryUsed,
+              estimatedConversationTokens:
+                prepared.conversationContext.metadata.estimatedConversationTokens,
+              compressionTriggered:
+                prepared.conversationContext.metadata.compressionTriggered,
+              totalAssembledContextEstimatedTokens:
+                prepared.conversationContext.metadata
+                  .totalAssembledContextEstimate,
+            }
+          : {}),
+        ...(prepared.conversationWrite
+          ? {
+              conversationId: prepared.conversationWrite.id,
+              conversationTurnId: prepared.conversationWrite.turnId,
+            }
+          : {}),
+        adaptiveStrategyKey: prepared.adaptiveStrategy.metadata.strategyKey,
         durationMs: Math.round(performance.now() - prepared.started),
       },
     };
@@ -344,6 +523,69 @@ export class AgentExecutor<Extension extends string = never> {
     return new AIError(
       error instanceof AIError ? error.code : "PROVIDER_FAILURE",
     );
+  }
+
+  private conversationError(error: unknown): AgentExecutionError {
+    if (!(error instanceof ConversationError))
+      return new AgentExecutionError("CONVERSATION_FAILURE");
+    if (error.code === "UNAUTHENTICATED")
+      return new AgentExecutionError("UNAUTHENTICATED");
+    if (error.code === "INVALID_REQUEST")
+      return new AgentExecutionError("INVALID_REQUEST");
+    if (
+      error.code === "CONVERSATION_NOT_FOUND" ||
+      error.code === "COURSE_MISMATCH" ||
+      error.code === "MESSAGE_NOT_FOUND"
+    )
+      return new AgentExecutionError("CONVERSATION_NOT_FOUND");
+    return new AgentExecutionError("CONVERSATION_FAILURE");
+  }
+
+  private async persistAssistant(
+    prepared: PreparedExecution<Extension>,
+    content: string,
+    metadata: Readonly<Record<string, string | number | boolean | null>> = {},
+  ): Promise<void> {
+    if (!prepared.conversationWrite) return;
+    try {
+      await appendConversationMessage(
+        {
+          conversationId: prepared.conversationWrite.id,
+          role: "assistant",
+          content,
+          turnId: prepared.conversationWrite.turnId,
+          agentId: prepared.agent.id,
+          metadata: { workspaceVisible: false, ...metadata },
+        },
+        // The owned context was already authenticated, but the storage service
+        // intentionally requires the same request headers at every write.
+        prepared.requestHeaders,
+        this.#conversationEmbeddingProvider !== undefined
+          ? { embeddingProvider: this.#conversationEmbeddingProvider }
+          : {},
+      );
+    } catch (error) {
+      throw this.conversationError(error);
+    }
+  }
+
+  private async persistAdaptiveOutcome(
+    prepared: PreparedExecution<Extension>,
+  ): Promise<void> {
+    if (!prepared.adaptiveUserId) return;
+    if (!STUDENT_AGENT_IDS.includes(prepared.agent.id as StudentAgentId)) return;
+    try {
+      await recordAdaptiveExecution({
+        userId: prepared.adaptiveUserId,
+        agentId: prepared.agent.id as StudentAgentId,
+        request: prepared.request,
+        strategy: prepared.adaptiveStrategy,
+        evidenceKey: prepared.adaptiveEvidenceKey,
+      });
+    } catch {
+      // A valid Agent response remains valid when optional behavior evidence
+      // cannot be stored. The next turn falls back to current owned context.
+    }
   }
 
   private resolveAgent(agentId: string) {

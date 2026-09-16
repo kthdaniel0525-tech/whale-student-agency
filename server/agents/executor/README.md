@@ -2,8 +2,8 @@
 
 A server-only pipeline for one selected registered agent:
 registry → declared context requirements → authenticated Context Builder → prompt
-→ one AIProvider text request → result with retrieved sources. No routing, tools,
-academic queries, vector search, data writes, agent-specific behavior, or UI.
+→ one AIProvider response request → result with retrieved sources. No routing,
+tools, direct academic queries, agent-specific conversation store, or UI.
 
 ```ts
 import { AgentRegistry, getStudentAgentDefinitions } from "@/server/agents";
@@ -27,7 +27,10 @@ the internal prepared-context contract used by the prompt builder. Requests acce
 agentId, request, optional courseId/documentIds and optional conversation/turn IDs.
 Input is strict: userId, prepared context, context options, execution instructions,
 messages and other unknown fields are rejected. Conversation IDs are bounded to
-100 characters, not resolved or forwarded to AI. No history is loaded or summarized.
+100 characters and resolved through the shared, user-owned Conversation service.
+The executor loads a structured rolling summary, the bounded recent window and
+bounded relevant older messages; raw IDs are not put in the prompt. It stores the
+current visible user/assistant turn with one idempotent turn ID.
 
 Context Builder verifies the Better Auth session from the supplied server headers,
 derives identity, and authorizes all supplied scopes, even if their categories are
@@ -56,15 +59,17 @@ need no executor conditionals. The standalone prompt helper expects prepared
 context and trusted, bounded instructions; it is not an authenticated entry point.
 
 The provider comes lazily from the existing factory or an injected `getProvider`.
-Only `generateText()` is called once, with existing central model/temperature/token
-configuration. No provider-specific types, SDK calls, streaming, retries, or answer
+The main response uses one normal or structured request. Threshold-triggered
+conversation compression may use the same provider's structured-output method
+before it. No provider-specific types, SDK calls, streaming, retries, or answer
 generation outside AIProvider are introduced.
 
 ## Results and failures
 
 The existing `AgentExecutionResult` contains selected agentId, content, sources,
-model, optional usage, elapsed milliseconds, and categories with nonempty context.
-The only shared contract addition is optional `metadata.contextCategories`.
+model, optional usage, elapsed milliseconds, categories with nonempty context, and
+bounded conversation observability counts/token estimates when conversation context
+is used. Full messages and summaries are never returned in metadata.
 
 Sources are copied exclusively from Context Builder's document metadata. Repeated
 document/chunk/page-span references are deduplicated in retrieval order; distinct

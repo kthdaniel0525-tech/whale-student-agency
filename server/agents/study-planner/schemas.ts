@@ -10,6 +10,10 @@ const dateOnly = z
 const scope = {
   examId: z.string().min(1).max(100).optional(),
   request: z.string().trim().min(3).max(1000),
+  conversation: z.object({
+    id: z.string().min(1).max(100),
+    turnId: z.string().min(1).max(100).optional(),
+  }).strict().optional(),
   courseId: z.string().min(1).max(100).optional(),
   documentIds: z
     .array(z.string().min(1).max(100))

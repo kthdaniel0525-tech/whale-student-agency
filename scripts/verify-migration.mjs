@@ -61,6 +61,11 @@ try {
       "WorkflowStepRun",
       "CareerPlan",
       "CareerTask",
+      "Conversation",
+      "ConversationMessage",
+      "ConversationSummary",
+      "AdaptiveOutcome",
+      "Recommendation",
     ]) {
       if (!tables.rows.some((row) => row.tablename === table))
         throw new Error(`Missing ${table} table.`);
@@ -68,7 +73,7 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 11)
+    if (migration.rows[0].count !== 14)
       throw new Error("Unexpected applied migration count.");
     const memoryColumns = await verify.query(
       `SELECT column_name FROM information_schema.columns
@@ -98,7 +103,7 @@ try {
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
     console.log(
-      "Fresh PostgreSQL migration verified: 31 tables, 11 migrations, memory constraints and semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
+      "Fresh PostgreSQL migration verified: 36 tables, 14 migrations, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
     );
   } finally {
     await verify.end();

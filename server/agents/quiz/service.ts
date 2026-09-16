@@ -34,6 +34,11 @@ import type {
   QuizAgentErrorCode,
   QuizEvaluation,
 } from "./types";
+import {
+  getRecentAdaptiveOutcomes,
+  recordAdaptiveOutcome,
+} from "../../adaptive";
+import { refreshRecommendationsBestEffort } from "../../recommendations";
 
 export interface QuizAgentServiceOptions {
   readonly router?: AgentRouterOptions;
@@ -162,6 +167,7 @@ export class QuizAgentService {
         {
           agentId: "quiz",
           request: contextRequest,
+          ...(parsed.data.conversation ? { conversation: parsed.data.conversation } : {}),
           ...(parsed.data.courseId ? { courseId: parsed.data.courseId } : {}),
           ...(parsed.data.documentIds
             ? { documentIds: parsed.data.documentIds }
@@ -172,12 +178,16 @@ export class QuizAgentService {
           ...support,
           schemaName: "quiz_generation",
           schema,
-          buildDirective: (_context, personalization) => {
+          buildDirective: (_context, personalization, adaptiveStrategy) => {
             if (!explicitlyRequestedDifficulty) {
-              appliedDifficulty = personalization.recommendedDifficulty?.value ?? "medium";
+              appliedDifficulty = adaptiveStrategy.difficulty ??
+                personalization.recommendedDifficulty?.value ?? "medium";
             }
             if (!explicitlyRequestedQuestionType) {
-              const preferred = personalization.preferredQuestionTypes?.value[0];
+              const adaptiveMix = adaptiveStrategy.questionMix;
+              const preferred = adaptiveMix?.length
+                ? adaptiveMix.length > 1 ? "mixed" : adaptiveMix[0]
+                : personalization.preferredQuestionTypes?.value[0];
               if (
                 preferred === "multiple-choice" ||
                 preferred === "true-false" ||
@@ -193,6 +203,9 @@ export class QuizAgentService {
               questionType: appliedQuestionType,
               difficulty: appliedDifficulty,
               adaptiveFallback: "medium",
+              diagnosticMode: adaptiveStrategy.diagnosticMode ?? false,
+              questionMix: adaptiveStrategy.questionMix ?? [],
+              feedbackStyle: adaptiveStrategy.feedbackStyle ?? "brief-correction",
               topic: parsed.data.topic ?? null,
             });
           },
@@ -376,11 +389,28 @@ export class QuizAgentService {
           userId,
           quiz: { userId },
         },
+        include: {
+          quiz: { select: { courseId: true, difficulty: true } },
+          topicMappings: { select: { topicId: true } },
+        },
       });
     } catch {
       throw new QuizAgentError("STORAGE_FAILURE");
     }
     if (!question) throw new QuizAgentError("QUIZ_NOT_FOUND");
+    const primaryTopicId = question.topicMappings[0]?.topicId;
+    const recentOutcomes = await getRecentAdaptiveOutcomes({
+      userId,
+      agentId: "quiz",
+      ...(question.quiz.courseId ? { courseId: question.quiz.courseId } : {}),
+      ...(primaryTopicId ? { topicId: primaryTopicId } : {}),
+      limit: 12,
+    }).catch(() => []);
+    const repeatedErrors = recentOutcomes.filter(
+      (outcome) =>
+        outcome.outcomeType === "quiz-performance" &&
+        outcome.successful === false,
+    ).length;
     const objective =
       question.type === "MULTIPLE_CHOICE" || question.type === "TRUE_FALSE";
     let grading: Omit<
@@ -458,6 +488,41 @@ export class QuizAgentService {
       }
       throw new QuizAgentError("STORAGE_FAILURE");
     }
+    if (!grading.correct && repeatedErrors >= 1) {
+      grading = {
+        ...grading,
+        feedback:
+          `${grading.feedback} This concept has been missed repeatedly; use Tutor for a different explanation before the next attempt.`,
+      };
+    }
+    try {
+      const topics = recorded.updatedTopicIds.length
+        ? recorded.updatedTopicIds
+        : [undefined];
+      await Promise.all(
+        topics.map((topicId) =>
+          recordAdaptiveOutcome({
+            userId,
+            agentId: "quiz",
+            ...(question.quiz.courseId ? { courseId: question.quiz.courseId } : {}),
+            ...(topicId ? { topicId } : {}),
+            strategyKey: `quiz:${difficultyFromDb[question.quiz.difficulty]}:${typeFromDb[question.type]}`,
+            strategy: {
+              difficulty: difficultyFromDb[question.quiz.difficulty],
+              questionMix: [typeFromDb[question.type]],
+            },
+            outcomeType: "quiz-performance",
+            score: grading.score,
+            successful: grading.correct,
+            evidenceKey: `question-attempt:${recorded.questionAttemptId}:${topicId ?? "general"}`,
+          }),
+        ),
+      );
+    } catch {
+      // LearningProgress is authoritative; optional adaptation evidence cannot
+      // make a successfully graded answer fail.
+    }
+    if (recorded.completed) await refreshRecommendationsBestEffort(userId);
     return {
       quizId: parsed.data.quizId,
       questionId: question.id,

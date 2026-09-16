@@ -21,6 +21,10 @@ export type DispatchDecision = DispatchTargetDecision | DispatchClarification;
 
 export type DispatcherInput = {
   request: string;
+  /** Optional owned conversation used by the unified workspace. */
+  conversationId?: string;
+  /** Client-generated idempotency key for the visible conversation turn. */
+  turnId?: string;
   courseId?: string;
   examId?: string;
   assignmentId?: string;

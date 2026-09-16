@@ -10,6 +10,7 @@ import {
   type EmbeddingProvider,
 } from "./embeddings";
 import { DocumentError, MAX_CHUNKS } from "./config";
+import { refreshRecommendationsBestEffort } from "@/server/recommendations";
 type Claim = {
   id: string;
   userId: string;
@@ -150,6 +151,7 @@ export async function processNextDocument(
         );
       })(),
     ]);
+    await refreshRecommendationsBestEffort(claim.userId);
   } catch (e) {
     await db().document.updateMany({
       where: {
