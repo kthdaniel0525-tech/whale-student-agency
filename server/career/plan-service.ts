@@ -49,4 +49,22 @@ export class CareerPlanService {
       throw new CareerPlanError("STORAGE_FAILURE");
     }
   }
+
+  async updateTaskStatus(id: string, status: "planned" | "in-progress" | "completed" | "skipped", headers: Headers) {
+    if (!id || id.length > 100) throw new CareerPlanError("INVALID_REQUEST");
+    const values = { planned: "PLANNED", "in-progress": "IN_PROGRESS", completed: "COMPLETED", skipped: "SKIPPED" } as const;
+    try {
+      const session = await auth().api.getSession({ headers, query: { disableRefresh: true } });
+      if (!session) throw new CareerPlanError("UNAUTHENTICATED");
+      const result = await db().careerTask.updateMany({
+        where: { id, userId: session.user.id, careerPlan: { userId: session.user.id } },
+        data: { status: values[status] },
+      });
+      if (!result.count) throw new NotFoundError();
+      return db().careerTask.findFirstOrThrow({ where: { id, userId: session.user.id } });
+    } catch (error) {
+      if (error instanceof CareerPlanError || error instanceof NotFoundError) throw error;
+      throw new CareerPlanError("STORAGE_FAILURE");
+    }
+  }
 }

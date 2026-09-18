@@ -26,7 +26,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
     await page.getByRole("button", { name: "Open my dashboard" }).click();
     await expect(page).toHaveURL(/\/student$/);
     await expect(
-      page.getByText("Room to get organized", { exact: true }),
+      page.getByRole("heading", { name: "Start with your first course", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Add course", exact: true }).click();
     await page.getByLabel("Course code").fill("MATH 1240");
@@ -42,6 +42,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
     await expect(
       page.getByRole("heading", { name: "Discrete Mathematics", exact: true }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: /^Assignments/ }).click();
     await page
       .getByRole("button", { name: "Add assignment", exact: true })
       .click();
@@ -57,6 +58,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
     await expect(
       page.getByRole("button", { name: "Reopen", exact: true }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: /^Exams/ }).click();
     await page.getByRole("button", { name: "Add exam", exact: true }).click();
     await page.getByLabel("Title", { exact: true }).fill("Midterm test");
     await page.getByLabel("Exam date").fill("2027-01-20T14:00");
@@ -80,6 +82,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
         exact: true,
       }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: /^Assignments/ }).click();
     await page
       .getByRole("button", { name: "Edit assignment", exact: true })
       .click();
@@ -90,6 +93,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
     await expect(
       page.getByRole("heading", { name: "Updated worksheet" }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: /^Exams/ }).click();
     await page.getByRole("button", { name: "Edit exam", exact: true }).click();
     await page.getByLabel("Title", { exact: true }).fill("Updated midterm");
     await page
@@ -102,6 +106,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
       path: "test-results/course-desktop.png",
       fullPage: true,
     });
+    await page.getByRole("tab", { name: /^Assignments/ }).click();
     await page
       .getByRole("button", { name: "Delete assignment", exact: true })
       .click();
@@ -110,8 +115,9 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
       .getByRole("button", { name: "Delete assignment", exact: true })
       .click();
     await expect(
-      page.getByText("No assignments yet", { exact: true }),
+      page.getByRole("heading", { name: "No assignments", exact: true }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: /^Exams/ }).click();
     await page
       .getByRole("button", { name: "Delete exam", exact: true })
       .click();
@@ -119,7 +125,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
       .getByRole("alertdialog")
       .getByRole("button", { name: "Delete exam", exact: true })
       .click();
-    await expect(page.getByText("No exams yet", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No exams", exact: true })).toBeVisible();
     await page
       .getByRole("button", { name: "Delete course", exact: true })
       .click();
@@ -156,7 +162,7 @@ test("student signs up, onboards, manages courses and deadlines, then signs out"
       path: "test-results/settings-mobile.png",
       fullPage: true,
     });
-    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+    await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/sign-in/);
     await page.goto("/student");

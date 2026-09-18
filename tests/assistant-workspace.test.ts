@@ -7,9 +7,12 @@ import { AIError } from "@/server/ai/errors";
 import { appendConversationMessage, createConversation } from "@/server/conversations";
 import type { DispatcherInput, UnifiedAIResult } from "@/server/dispatcher";
 import {
+  evaluateAssistantQuizAnswer,
   executeAssistantRequest,
   getAssistantBootstrap,
   getAssistantConversation,
+  getAssistantQuiz,
+  resumeAssistantWorkflow,
 } from "@/server/assistant";
 
 type Actor = { id: string; email: string; headers: Headers };
@@ -31,12 +34,12 @@ async function actor(label: string): Promise<Actor> {
 
 const metrics = { dispatchDurationMs: 1, executionDurationMs: 2, totalDurationMs: 3, aiCalls: 1, ragCalls: 0, contextCharacters: 0, contextEstimatedTokens: 0, workflowSteps: 0, success: true };
 
-function agentResult(overrides: { targetId?: "tutor" | "quiz" | "study-planner"; content?: string; structuredData?: unknown } = {}): UnifiedAIResult {
+function agentResult(overrides: { targetId?: "tutor" | "notes" | "quiz" | "study-planner" | "career"; content?: string; structuredData?: unknown; sources?: Array<{ documentId: string; documentTitle: string; pageNumber: number | null; pageEnd: number | null; courseId: string | null; courseCode: string | null; chunkIndex: number }> } = {}): UnifiedAIResult {
   const id = overrides.targetId ?? "tutor";
   const name = id === "study-planner" ? "Study Planner" : id[0].toUpperCase() + id.slice(1);
   return {
     needsClarification: false, mode: "agent", target: { id, name }, dispatch: { confidence: .95, method: "rule" },
-    result: { ok: true, agent: { id, name }, routing: { agentId: id, confidence: .95, method: "rule" }, response: { content: overrides.content ?? "Use the base case, then prove the inductive step.", sources: [], ...(overrides.structuredData !== undefined ? { structuredData: overrides.structuredData } : {}) }, metadata: { totalDurationMs: 2 } },
+    result: { ok: true, agent: { id, name }, routing: { agentId: id, confidence: .95, method: "rule" }, response: { content: overrides.content ?? "Use the base case, then prove the inductive step.", sources: overrides.sources ?? [], ...(overrides.structuredData !== undefined ? { structuredData: overrides.structuredData } : {}) }, metadata: { totalDurationMs: 2 } },
     metrics,
   };
 }
@@ -84,6 +87,22 @@ describe.sequential("Main AI workspace service", () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ request: "Help with this material.", conversationId: conversation.id, courseId, documentIds: ["document-one"], assignmentId: "assignment-one", preferredAgentId: "tutor" }), expect.any(Headers));
   });
 
+  it("passes project and target-role context from Career Workspace launches", async () => {
+    const project = await db().project.create({ data: { userId: owner.id, name: "Career context project", description: "A saved project used for context.", technologies: ["TypeScript"] } });
+    const execute = vi.fn(async () => agentResult({ targetId: "career", content: "Review the saved project evidence." }));
+    await executeAssistantRequest({
+      request: "Improve this project for my target role.", turnId: "turn-career-context",
+      projectIds: [project.id], targetRole: "Software Engineering Intern",
+      targetIndustry: "Education Technology", applicationTimeline: "in 8 weeks",
+      preferredAgentId: "career",
+    }, owner.headers, { execute });
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      projectIds: [project.id], targetRole: "Software Engineering Intern",
+      targetIndustry: "Education Technology", applicationTimeline: "in 8 weeks",
+      preferredAgentId: "career",
+    }), expect.any(Headers));
+  });
+
   it("replays a completed idempotent turn without a second AI execution", async () => {
     const conversation = await createConversation({ courseId }, owner.headers);
     const execute = vi.fn(async () => agentResult());
@@ -102,6 +121,46 @@ describe.sequential("Main AI workspace service", () => {
     expect(response.assistantMessage.metadata).toMatchObject({ artifactType: "quiz", artifactId: "quiz-one" });
   });
 
+  it("persists normalized Tutor actions, structured display data, and sources across reload", async () => {
+    const source = { documentId: "doc-actions", documentTitle: "Proof Lecture", pageNumber: 4, pageEnd: 4, courseId, courseCode: "MATH 1240", chunkIndex: 0 };
+    const response = await executeAssistantRequest({ request: "Explain induction.", turnId: "turn-rich-tutor", courseId }, owner.headers, {
+      execute: async () => agentResult({ structuredData: { keyTakeaway: "The inductive step carries truth forward." }, sources: [source] }),
+    });
+    expect(response.assistantMessage.presentation?.actions).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Test my understanding", targetId: "quiz" })]));
+    const loaded = await getAssistantConversation(response.conversation.id, owner.headers);
+    const presentation = loaded.messages.find((message) => message.role === "assistant")?.presentation;
+    expect(presentation).toMatchObject({
+      mode: "agent",
+      structuredData: { keyTakeaway: "The inductive step carries truth forward." },
+      sources: [{ documentId: "doc-actions", pageNumber: 4 }],
+      actions: expect.arrayContaining([expect.objectContaining({ id: "tutor-check" })]),
+    });
+  });
+
+  it("reconstructs persisted Quiz answers without revealing unattempted answers", async () => {
+    const quiz = await db().quiz.create({
+      data: {
+        userId: owner.id,
+        courseId,
+        title: "Persisted logic quiz",
+        topic: "Logic",
+        difficulty: "MEDIUM",
+        questions: {
+          create: [
+            { position: 0, type: "TRUE_FALSE", prompt: "A proposition has a truth value.", choices: ["True", "False"], correctAnswer: "True", explanation: "A proposition is a declarative statement with a truth value.", topicNames: ["Logic"] },
+            { position: 1, type: "MULTIPLE_CHOICE", prompt: "Which operator means not?", choices: ["¬", "∧", "∨", "→"], correctAnswer: "¬", explanation: "The negation operator is ¬.", topicNames: ["Logic"] },
+          ],
+        },
+      },
+      include: { questions: { orderBy: { position: "asc" } } },
+    });
+    const evaluation = await evaluateAssistantQuizAnswer(quiz.id, { questionId: quiz.questions[0].id, userAnswer: "True" }, owner.headers);
+    const hydrated = await getAssistantQuiz(quiz.id, owner.headers);
+    expect(hydrated.attempt).toMatchObject({ id: evaluation.quizAttemptId, completedAt: null, evaluations: [{ questionId: quiz.questions[0].id, correct: true, userAnswer: "True" }] });
+    expect(hydrated.attempt?.evaluations.some((item) => item.questionId === quiz.questions[1].id)).toBe(false);
+    await expect(getAssistantQuiz(quiz.id, other.headers)).rejects.toMatchObject({ code: "QUIZ_NOT_FOUND" });
+  });
+
   it("returns a persisted Study Plan as a task-oriented presentation", async () => {
     const plan = { id: "plan-one", title: "Midterm plan", startDate: "2026-09-15", endDate: "2026-09-16", summary: "Repair induction, then review logic.", totalPlannedMinutes: 90, assumptions: [], days: [] };
     const response = await executeAssistantRequest({ request: "Plan my week.", turnId: "turn-plan", courseId }, owner.headers, { execute: async () => agentResult({ targetId: "study-planner", content: "Midterm plan", structuredData: plan }) });
@@ -114,6 +173,25 @@ describe.sequential("Main AI workspace service", () => {
     expect(response.assistantMessage.content).toBe("I reviewed the assignment. Add your draft to continue.");
     expect(response.assistantMessage.presentation).toMatchObject({ kind: "workflow", targetName: "Assignment Support", workflow: { status: "waiting-for-input", completedSteps: ["understand"], waitingFor: { kind: "student-work" } } });
     expect(JSON.stringify(response.assistantMessage)).not.toMatch(/confidence|internal prompt|system prompt/i);
+  });
+
+  it("replays a completed Workflow resume turn without duplicate messages", async () => {
+    const conversation = await createConversation({ courseId }, owner.headers);
+    const run = await db().workflowRun.create({
+      data: {
+        userId: owner.id,
+        workflowId: "exam-preparation",
+        status: "COMPLETED",
+        input: { goal: "Prepare for the exam." },
+        context: { conversationId: conversation.id, courseId, studyPlanId: null, quizId: null },
+      },
+    });
+    await appendConversationMessage({ conversationId: conversation.id, role: "user", content: "Completed the checkpoint.", turnId: "resume-replay", metadata: { workspaceVisible: true, workflowResume: true } }, owner.headers, { embeddingProvider: null });
+    await appendConversationMessage({ conversationId: conversation.id, role: "assistant", content: "Exam preparation is ready.", turnId: "resume-replay", metadata: { workspaceVisible: true, presentationKind: "workflow", workflowRunId: run.id, targetId: "exam-preparation", targetName: "Exam Preparation" } }, owner.headers, { embeddingProvider: null });
+    const replay = await resumeAssistantWorkflow(owner.id, run.id, { turnId: "resume-replay", userWork: "Duplicate network retry" }, owner.headers);
+    expect("assistantMessage" in replay).toBe(true);
+    if ("assistantMessage" in replay) expect(replay.assistantMessage.presentation).toMatchObject({ mode: "workflow", workflow: { runId: run.id, status: "completed" } });
+    expect((await getAssistantConversation(conversation.id, owner.headers)).messages).toHaveLength(2);
   });
 
   it("persists clarification as a normal visible assistant turn", async () => {

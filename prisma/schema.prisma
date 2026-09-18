@@ -148,6 +148,7 @@ model User {
   quizQuestions  QuizQuestion[]
   quizAttempts   QuizAttempt[]
   learningTopics LearningTopic[]
+  learningProgressSnapshots LearningProgressSnapshot[]
   studyPlans     StudyPlan[]
   studyTasks     StudyTask[]
   careerProfile  CareerProfile?
@@ -629,11 +630,32 @@ model LearningTopic {
   course           Course              @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
   questionMappings QuizQuestionTopic[]
   progress         LearningProgress?
+  progressSnapshots LearningProgressSnapshot[]
   studyTasks       StudyTask[]
 
   @@unique([userId, courseId, id])
   @@unique([userId, courseId, normalizedName])
   @@index([courseId, userId])
+}
+
+// A compact history point written only when a quiz is completed. The current
+// LearningProgress row remains the source of truth for every live metric.
+model LearningProgressSnapshot {
+  id                 String        @id @default(cuid())
+  userId             String
+  courseId           String
+  topicId            String
+  masteryScore       Float
+  confidenceScore    Float
+  recentAccuracy     Float
+  questionsAttempted Int
+  trend              LearningTrend
+  recordedAt         DateTime      @default(now())
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic              LearningTopic @relation(fields: [userId, courseId, topicId], references: [userId, courseId, id], onDelete: Cascade)
+
+  @@index([userId, topicId, recordedAt])
+  @@index([userId, courseId, recordedAt])
 }
 
 model QuizQuestionTopic {
@@ -791,6 +813,7 @@ model Assignment {
 
   @@index([userId, status, dueDate])
   @@index([courseId, userId])
+  @@index([userId, courseId, dueDate])
 }
 
 model Exam {
@@ -809,6 +832,7 @@ model Exam {
 
   @@index([userId, examDate])
   @@index([courseId, userId])
+  @@index([userId, courseId, examDate])
 }
 
 model UserMemory {

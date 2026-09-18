@@ -248,7 +248,7 @@ describe("student metadata and execution contracts", () => {
         "profile",
       ],
       tutor: ["course", "documents", "learning", "memories", "profile"],
-      notes: ["course", "documents", "memories"],
+      notes: ["course", "documents", "exams", "learning", "memories"],
       quiz: ["course", "documents", "learning", "memories", "profile"],
       "study-planner": [
         "assignments",

@@ -739,6 +739,38 @@ async function lockLearningUpdates(
   `;
 }
 
+async function snapshotCompletedQuizTopics(
+  transaction: Transaction,
+  userId: string,
+  quizId: string,
+  recordedAt: Date,
+): Promise<void> {
+  const mappings = await transaction.quizQuestionTopic.findMany({
+    where: { userId, question: { quizId, userId } },
+    select: { topicId: true },
+    distinct: ["topicId"],
+  });
+  const topicIds = mappings.map((mapping) => mapping.topicId);
+  if (!topicIds.length) return;
+  const progress = await transaction.learningProgress.findMany({
+    where: { userId, topicId: { in: [...topicIds] } },
+    select: {
+      userId: true,
+      courseId: true,
+      topicId: true,
+      masteryScore: true,
+      confidenceScore: true,
+      recentAccuracy: true,
+      questionsAttempted: true,
+      trend: true,
+    },
+  });
+  if (!progress.length) return;
+  await transaction.learningProgressSnapshot.createMany({
+    data: progress.map((item) => ({ ...item, recordedAt })),
+  });
+}
+
 export async function recordQuestionEvaluation(rawInput: {
   readonly userId: string;
   readonly quizId: string;
@@ -916,11 +948,18 @@ export async function recordQuestionEvaluation(rawInput: {
           where: { quizId: input.quizId, userId: input.userId },
         }),
       ]);
-      if (!quizAttempt.completedAt && answered >= questionCount) {
+      const completedNow = !quizAttempt.completedAt && answered >= questionCount;
+      if (completedNow) {
         quizAttempt = await transaction.quizAttempt.update({
           where: { id: quizAttempt.id },
           data: { completedAt: attemptedAt },
         });
+        await snapshotCompletedQuizTopics(
+          transaction,
+          input.userId,
+          input.quizId,
+          attemptedAt,
+        );
       }
       return {
         quizAttemptId: quizAttempt.id,

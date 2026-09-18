@@ -55,6 +55,35 @@ export type AssistantMessage = {
   presentation?: AssistantPresentation;
 };
 
+export type AssistantActionTarget = "agent" | "workflow";
+export type AssistantActionStyle = "primary" | "secondary" | "quiet";
+
+/** A provider-independent action supplied to interactive result components. */
+export type AssistantAction = {
+  id: string;
+  label: string;
+  targetType: AssistantActionTarget;
+  targetId: string;
+  prompt: string;
+  payload?: {
+    courseId?: string;
+    documentIds?: string[];
+    assignmentId?: string;
+    examId?: string;
+    topicId?: string;
+    topicName?: string;
+    studyPlanId?: string;
+    projectIds?: string[];
+    targetRole?: string;
+    targetIndustry?: string;
+    targetCompanies?: string[];
+    applicationTimeline?: string;
+    availableWeeklyMinutes?: number;
+  };
+  style?: AssistantActionStyle;
+  confirmationRequired?: boolean;
+};
+
 export type AssistantSource = {
   documentId: string;
   documentTitle: string;
@@ -64,16 +93,24 @@ export type AssistantSource = {
   chunkIndex: number;
 };
 
-export type AssistantPresentation = {
+/** Normalized result contract used by all Agent and Workflow renderers. */
+export type AIResult = {
+  mode: "agent" | "workflow";
   kind: "agent" | "workflow" | "clarification" | "error";
   targetId?: string;
   targetName?: string;
+  content?: string;
   structuredData?: unknown;
   workflow?: AssistantWorkflow;
   quiz?: AssistantQuiz;
   studyPlan?: AssistantStudyPlan;
   sources?: AssistantSource[];
+  actions?: AssistantAction[];
+  status?: string;
+  metadata?: Record<string, string | number | boolean | null>;
 };
+
+export type AssistantPresentation = AIResult;
 
 export type AssistantConversation = AssistantConversationSummary & {
   messages: AssistantMessage[];
@@ -90,6 +127,12 @@ export type AssistantRequestPayload = {
   topicId?: string;
   topicName?: string;
   studyPlanId?: string;
+  projectIds?: string[];
+  targetRole?: string;
+  targetIndustry?: string;
+  targetCompanies?: string[];
+  applicationTimeline?: string;
+  availableWeeklyMinutes?: number;
   preferredAgentId?: Exclude<AssistantAgentId, "auto">;
   preferredWorkflowId?: string;
 };
@@ -119,6 +162,9 @@ export type AssistantQuiz = {
   topic: string | null;
   difficulty: string;
   questions: readonly AssistantQuizQuestion[];
+  sources?: readonly AssistantSource[];
+  attempt?: AssistantQuizAttempt | null;
+  adapted?: boolean;
 };
 
 export type AssistantQuizEvaluation = {
@@ -129,19 +175,41 @@ export type AssistantQuizEvaluation = {
   score: number;
   feedback: string;
   explanation: string;
+  userAnswer?: string;
+  method?: "deterministic" | "semantic";
+};
+
+export type AssistantQuizAttempt = {
+  id: string;
+  completedAt: string | null;
+  evaluations: readonly AssistantQuizEvaluation[];
 };
 
 export type AssistantStudyTask = {
   id: string;
   date: string;
   title: string;
+  courseId?: string | null;
   courseName: string | null;
+  topicId?: string | null;
   topic: string | null;
+  examId?: string | null;
+  assignmentId?: string | null;
   activityType: string;
   durationMinutes: number;
   priority: number;
   status: "planned" | "in-progress" | "completed" | "skipped";
   reason: string;
+};
+
+export type AssistantPendingInteraction = {
+  type: "quiz" | "text" | "long-text" | "confirmation" | "choice";
+  title: string;
+  description?: string;
+  requiredFields?: readonly string[];
+  choices?: readonly string[];
+  submitLabel: string;
+  kind?: "student-work" | "career-data";
 };
 
 export type AssistantStudyPlan = {
@@ -161,7 +229,7 @@ export type AssistantStudyPlan = {
 export type AssistantWorkflow = {
   runId: string;
   workflowId: string;
-  status: "pending" | "running" | "waiting-for-input" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "waiting-for-input" | "waiting-for-user" | "completed" | "failed" | "cancelled";
   summary: string;
   completedSteps: string[];
   steps: Array<{
@@ -175,4 +243,5 @@ export type AssistantWorkflow = {
   errorCode: string | null;
   recommendedNextAction: string;
   waitingFor?: { kind: "quiz" | "student-work" | "career-data"; referenceId: string } | null;
+  pendingInteraction?: AssistantPendingInteraction | null;
 };

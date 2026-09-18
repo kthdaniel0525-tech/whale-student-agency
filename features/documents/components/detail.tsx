@@ -1,12 +1,23 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { request } from "@/lib/student/client";
 import { DocumentActions } from "./actions";
 import { ProcessingStatus } from "./library";
 import type { DocumentItem } from "../types";
-export function DocumentDetail({ initial }: { initial: DocumentItem }) {
+function assistantUrl(
+  prompt: string,
+  target: { type: "agent" | "workflow"; id: string } | null,
+  item: DocumentItem,
+) {
+  const params = new URLSearchParams({ prompt, documentId: item.id });
+  if (item.courseId) params.set("courseId", item.courseId);
+  if (target) params.set(target.type, target.id);
+  return `/student/assistant?${params.toString()}`;
+}
+
+export function DocumentDetail({ initial, initialPage = 1 }: { initial: DocumentItem; initialPage?: number }) {
   const [item, setItem] = useState(initial);
   const [pages, setPages] = useState<{ pageNumber: number; content: string }[]>(
     [],
@@ -14,6 +25,7 @@ export function DocumentDetail({ initial }: { initial: DocumentItem }) {
   const [error, setError] = useState("");
   const [from, setFrom] = useState(1);
   const [busy, setBusy] = useState(false);
+  const openedCitation = useRef(false);
   const reload = useCallback(async () => {
     try {
       setItem(
@@ -26,12 +38,7 @@ export function DocumentDetail({ initial }: { initial: DocumentItem }) {
       setError(e instanceof Error ? e.message : "Unable to refresh.");
     }
   }, [initial.id]);
-  useEffect(() => {
-    if (!["UPLOADED", "PROCESSING"].includes(item.processingStatus)) return;
-    const timer = setInterval(() => void reload(), 2500);
-    return () => clearInterval(timer);
-  }, [item.processingStatus, reload]);
-  async function showPages(start: number) {
+  const showPages = useCallback(async (start: number) => {
     setBusy(true);
     setError("");
     try {
@@ -46,11 +53,21 @@ export function DocumentDetail({ initial }: { initial: DocumentItem }) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [item.id, item.pageCount]);
+  useEffect(() => {
+    if (!["UPLOADED", "PROCESSING"].includes(item.processingStatus)) return;
+    const timer = setInterval(() => void reload(), 2500);
+    return () => clearInterval(timer);
+  }, [item.processingStatus, reload]);
+  useEffect(() => {
+    if (openedCitation.current || item.processingStatus !== "READY") return;
+    openedCitation.current = true;
+    void showPages(Math.min(initialPage, item.pageCount || initialPage));
+  }, [initialPage, item.pageCount, item.processingStatus, showPages]);
   return (
     <>
-      <Link href="/student/documents" className="text-primary text-sm">
-        ← Document library
+      <Link href={item.courseId ? `/student/courses/${item.courseId}` : "/student/documents"} className="text-primary text-sm">
+        ← {item.courseId ? `${item.course?.courseCode || "Course"} workspace` : "Document library"}
       </Link>
       <div className="page-heading mt-5">
         <div>
@@ -61,6 +78,9 @@ export function DocumentDetail({ initial }: { initial: DocumentItem }) {
           <p>
             {item.originalFileName} · {item.fileType} · {item.pageCount ?? "—"}{" "}
             pages
+          </p>
+          <p className="muted text-sm mt-2">
+            Uploaded {new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(item.createdAt))}
           </p>
         </div>
         <ProcessingStatus status={item.processingStatus} />
@@ -105,6 +125,23 @@ export function DocumentDetail({ initial }: { initial: DocumentItem }) {
                 >
                   Search this document
                 </Link>
+              </Button>
+            </div>
+            <div className="document-detail-ai-actions" aria-label="Document AI actions">
+              <Button asChild size="sm">
+                <Link href={assistantUrl(`Study ${item.title} as a lecture.`, { type: "workflow", id: "lecture-study" }, item)}>Study this lecture</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href={assistantUrl(`Summarize ${item.title}.`, { type: "agent", id: "notes" }, item)}>Summarize</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href={assistantUrl(`Make structured notes from ${item.title}.`, { type: "agent", id: "notes" }, item)}>Make notes</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href={assistantUrl(`Quiz me on ${item.title}.`, { type: "agent", id: "quiz" }, item)}>Quiz me</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href={assistantUrl(`Help me with ${item.title}.`, null, item)}>Ask AI</Link>
               </Button>
             </div>
           </div>

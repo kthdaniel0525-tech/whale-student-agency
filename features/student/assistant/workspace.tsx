@@ -12,7 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { AssistantMessageView } from "./message-renderer";
 import type {
   AssistantAgentId, AssistantBootstrap, AssistantConversation, AssistantConversationSummary,
-  AssistantLaunch, AssistantMessage, AssistantRequestPayload, AssistantRequestResponse,
+  AssistantAction, AssistantLaunch, AssistantMessage, AssistantRequestPayload, AssistantRequestResponse,
+  AssistantQuiz, AssistantStudyPlan, AssistantWorkflow,
 } from "./types";
 
 const agents: Array<[AssistantAgentId, string]> = [
@@ -41,11 +42,21 @@ function temporaryMessage(role: "user" | "assistant", content: string, turnId: s
   return { id: `temporary-${role}-${turnId}`, turnId, role, content, agentId: null, createdAt: new Date().toISOString(), metadata: null };
 }
 
-export function AssistantWorkspace({ initial, initialLaunch }: { initial: AssistantBootstrap; initialLaunch?: AssistantLaunch }) {
-  const [conversations, setConversations] = useState(initial.conversations);
-  const [conversationId, setConversationId] = useState<string>();
-  const [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const [courseId, setCourseId] = useState(initialLaunch?.courseId ?? "");
+export function AssistantWorkspace({
+  initial,
+  initialLaunch,
+  initialConversation,
+}: {
+  initial: AssistantBootstrap;
+  initialLaunch?: AssistantLaunch;
+  initialConversation?: AssistantConversation;
+}) {
+  const [conversations, setConversations] = useState(() => initialConversation
+    ? updateHistory(initial.conversations, initialConversation)
+    : initial.conversations);
+  const [conversationId, setConversationId] = useState<string | undefined>(initialConversation?.id);
+  const [messages, setMessages] = useState<AssistantMessage[]>(initialConversation?.messages ?? []);
+  const [courseId, setCourseId] = useState(initialLaunch?.courseId ?? initialConversation?.courseId ?? "");
   const [documentIds, setDocumentIds] = useState<string[]>(initialLaunch?.documentIds ?? []);
   const [assignmentId, setAssignmentId] = useState(initialLaunch?.assignmentId ?? "");
   const [examId, setExamId] = useState(initialLaunch?.examId ?? "");
@@ -75,8 +86,17 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
     setCourseId(nextCourse); setDocumentIds([]); setAssignmentId(""); setExamId("");
   }
 
+  function updateConversationUrl(id?: string) {
+    window.history.replaceState(
+      window.history.state,
+      "",
+      id ? `/student/assistant?conversationId=${encodeURIComponent(id)}` : "/student/assistant",
+    );
+  }
+
   function newConversation() {
     setConversationId(undefined); setMessages([]); resetContext(); setAgentId("auto"); setError(undefined); setHistoryOpen(false);
+    updateConversationUrl();
   }
 
   async function openConversation(id: string) {
@@ -85,6 +105,7 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
     try {
       const loaded = await json<AssistantConversation>(await fetch(`/api/student/assistant/conversations/${id}`));
       setConversationId(loaded.id); setMessages(loaded.messages); resetContext(loaded.courseId ?? ""); setHistoryOpen(false);
+      updateConversationUrl(loaded.id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "The conversation could not be loaded."); }
     finally { setLoadingConversation(false); }
   }
@@ -92,6 +113,7 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
   function applyCourse(nextCourse: string) {
     if (conversationId && nextCourse !== (conversation?.courseId ?? "")) {
       setConversationId(undefined); setMessages([]);
+      updateConversationUrl();
     }
     resetContext(nextCourse);
   }
@@ -133,7 +155,7 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
           if (event.type === "status" && event.message) setStatusMessage(event.message);
           if (event.type === "delta" && event.text) {
             streamed += event.text;
-            const partial = { ...temporaryMessage("assistant", streamed, turnId), id: streamingId, presentation: { kind: "agent" as const, targetName: "Academic AI" } };
+            const partial = { ...temporaryMessage("assistant", streamed, turnId), id: streamingId, presentation: { mode: "agent" as const, kind: "agent" as const, targetName: "Academic AI" } };
             setMessages((current) => current.some((message) => message.id === streamingId) ? current.map((message) => message.id === streamingId ? partial : message) : [...current, partial]);
           }
           if (event.type === "error") throw new Error(event.message || "The AI request could not be completed.");
@@ -143,6 +165,7 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
       }
       if (!result) throw new Error("The AI response ended before it was complete.");
       setConversationId(result.conversation.id);
+      updateConversationUrl(result.conversation.id);
       setConversations((current) => updateHistory(current, result.conversation));
       setMessages((current) => [...current.filter((message) => message.id !== optimistic.id && message.id !== streamingId), result.userMessage, result.assistantMessage]);
     } catch (cause) {
@@ -167,32 +190,90 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
       const action = await json<{ target: { type: "agent" | "workflow"; id: string }; payload: Record<string, string | number | boolean | null> }>(await fetch(`/api/student/recommendations/${id}/action`, { method: "POST" }));
       const selectedCourse = typeof action.payload.courseId === "string" ? action.payload.courseId : courseId;
       const startsNewConversation = Boolean(
-        conversationId && selectedCourse && selectedCourse !== (conversation?.courseId ?? ""),
+        conversationId && conversation?.courseId && selectedCourse && selectedCourse !== conversation.courseId,
       );
-      if (selectedCourse) applyCourse(selectedCourse);
+      if (selectedCourse) {
+        if (startsNewConversation) applyCourse(selectedCourse);
+        else resetContext(selectedCourse);
+      }
       const override: Partial<AssistantRequestPayload> = {
         ...(startsNewConversation ? { conversationId: undefined } : {}),
         ...(selectedCourse ? { courseId: selectedCourse } : {}),
         documentIds: typeof action.payload.documentId === "string" ? [action.payload.documentId] : [],
         assignmentId: typeof action.payload.assignmentId === "string" ? action.payload.assignmentId : undefined,
         examId: typeof action.payload.examId === "string" ? action.payload.examId : undefined,
+        projectIds: typeof action.payload.projectId === "string" ? [action.payload.projectId] : undefined,
         ...(action.target.type === "agent" ? { preferredAgentId: action.target.id as Exclude<AssistantAgentId, "auto"> } : { preferredWorkflowId: action.target.id }),
       };
       await sendPrompt(`${title}. ${message}`, override);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "This recommendation could not be started."); }
   }
 
+  async function runResultAction(action: AssistantAction) {
+    if (busy) return;
+    if (action.confirmationRequired && !window.confirm(`Continue with “${action.label}”?`)) return;
+    const payload = action.payload ?? {};
+    const selectedCourse = payload.courseId ?? courseId;
+    const startsNewConversation = Boolean(conversationId && conversation?.courseId && selectedCourse && selectedCourse !== conversation.courseId);
+    if (payload.courseId && payload.courseId !== courseId) {
+      if (startsNewConversation) applyCourse(payload.courseId);
+      else resetContext(payload.courseId);
+    }
+    const allowedAgent = agents.some(([id]) => id === action.targetId && id !== "auto");
+    const overrides: Partial<AssistantRequestPayload> = {
+      ...(startsNewConversation ? { conversationId: undefined } : {}),
+      ...(selectedCourse ? { courseId: selectedCourse } : {}),
+      ...(payload.documentIds ? { documentIds: payload.documentIds } : {}),
+      ...(payload.assignmentId ? { assignmentId: payload.assignmentId } : {}),
+      ...(payload.examId ? { examId: payload.examId } : {}),
+      ...(payload.topicId ? { topicId: payload.topicId } : {}),
+      ...(payload.topicName ? { topicName: payload.topicName } : {}),
+      ...(payload.studyPlanId ? { studyPlanId: payload.studyPlanId } : {}),
+      ...(payload.projectIds ? { projectIds: payload.projectIds } : {}),
+      ...(payload.targetRole ? { targetRole: payload.targetRole } : {}),
+      ...(payload.targetIndustry ? { targetIndustry: payload.targetIndustry } : {}),
+      ...(payload.targetCompanies ? { targetCompanies: payload.targetCompanies } : {}),
+      ...(payload.applicationTimeline ? { applicationTimeline: payload.applicationTimeline } : {}),
+      ...(payload.availableWeeklyMinutes ? { availableWeeklyMinutes: payload.availableWeeklyMinutes } : {}),
+      ...(action.targetType === "agent" && allowedAgent
+        ? { preferredAgentId: action.targetId as Exclude<AssistantAgentId, "auto"> }
+        : action.targetType === "workflow" ? { preferredWorkflowId: action.targetId } : {}),
+    };
+    if (action.targetType === "agent" && !allowedAgent) {
+      setError("This action is no longer available.");
+      return;
+    }
+    await sendPrompt(action.prompt, overrides);
+  }
+
+  function applyWorkflowResponse(result: {
+    workflow?: AssistantWorkflow;
+    quiz?: AssistantQuiz;
+    studyPlan?: AssistantStudyPlan;
+    userMessage?: AssistantMessage;
+    assistantMessage?: AssistantMessage;
+  }, runId: string) {
+    if (!result.userMessage || !result.assistantMessage) return;
+    setMessages((current) => [
+      ...current.map((message) => message.presentation?.workflow?.runId === runId
+        ? { ...message, presentation: undefined }
+        : message),
+      result.userMessage!,
+      result.assistantMessage!,
+    ]);
+  }
+
   async function resumeWorkflow(runId: string, value: string, kind: "student-work" | "career-data") {
     const turnId = crypto.randomUUID();
     const body = kind === "student-work" ? { turnId, userWork: value } : { turnId, careerData: { experienceSummary: value } };
-    const result = await json<{ userMessage?: AssistantMessage; assistantMessage?: AssistantMessage }>(await fetch(`/api/student/assistant/workflows/${runId}/resume`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
-    if (result.userMessage && result.assistantMessage) setMessages((current) => [...current, result.userMessage!, result.assistantMessage!]);
+    const result = await json<{ workflow?: AssistantWorkflow; quiz?: AssistantQuiz; studyPlan?: AssistantStudyPlan; userMessage?: AssistantMessage; assistantMessage?: AssistantMessage }>(await fetch(`/api/student/assistant/workflows/${runId}/resume`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    applyWorkflowResponse(result, runId);
   }
 
   async function completeWorkflowQuiz(runId: string, quizAttemptId: string) {
     const turnId = crypto.randomUUID();
-    const result = await json<{ userMessage?: AssistantMessage; assistantMessage?: AssistantMessage }>(await fetch(`/api/student/assistant/workflows/${runId}/resume`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turnId, quizAttemptId }) }));
-    if (result.userMessage && result.assistantMessage) setMessages((current) => [...current, result.userMessage!, result.assistantMessage!]);
+    const result = await json<{ workflow?: AssistantWorkflow; quiz?: AssistantQuiz; studyPlan?: AssistantStudyPlan; userMessage?: AssistantMessage; assistantMessage?: AssistantMessage }>(await fetch(`/api/student/assistant/workflows/${runId}/resume`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turnId, quizAttemptId }) }));
+    applyWorkflowResponse(result, runId);
   }
 
   function addDocument(id: string) {
@@ -217,9 +298,9 @@ export function AssistantWorkspace({ initial, initialLaunch }: { initial: Assist
           <Button className="ml-auto" size="sm" variant="outline" onClick={newConversation}><MessageSquarePlus /> <span className="hidden sm:inline">New chat</span></Button>
         </header>
 
-        <div className="assistant-messages" aria-live="polite">
+        <div className="assistant-messages" aria-live="polite" aria-busy={busy || loadingConversation}>
           {loadingConversation ? <div className="flex min-h-72 items-center justify-center gap-2 muted"><Loader2 className="animate-spin" /> Loading conversation…</div> : messages.length ? (
-            <div className="mx-auto w-full max-w-3xl space-y-7 py-7">{messages.map((message) => <AssistantMessageView key={message.id} message={message} onWorkflowResume={resumeWorkflow} onQuizComplete={completeWorkflowQuiz} />)}{busy && <div className="assistant-thinking"><span /><span /><span /> <p>{statusMessage}</p></div>}</div>
+            <div className="mx-auto w-full max-w-3xl space-y-7 py-7">{messages.map((message) => <AssistantMessageView key={message.id} message={message} onWorkflowResume={resumeWorkflow} onQuizComplete={completeWorkflowQuiz} onAction={runResultAction} actionBusy={busy} />)}{busy && <div className="assistant-thinking"><span /><span /><span /> <p>{statusMessage}</p></div>}</div>
           ) : (
             <div className="assistant-welcome"><span className="assistant-welcome-icon"><Sparkles /></span><h2>What can I help you accomplish?</h2><p>Ask naturally. I’ll choose the right academic support and use only the context you allow.</p><div className="assistant-prompt-grid">{generalPrompts.map(([label, prompt, Icon]) => <button key={label} onClick={() => sendPrompt(prompt)}><Icon size={18} /><span><strong>{label}</strong><small>{prompt}</small></span></button>)}</div>{initial.recommendations.length > 0 && <div className="assistant-recommendations"><p className="eyebrow">Recommended for you</p>{initial.recommendations.slice(0, 3).map((recommendation) => <button key={recommendation.id} onClick={() => startRecommendation(recommendation.id, recommendation.title, recommendation.message)}><span className={`recommendation-dot priority-${recommendation.priority}`} /><span><strong>{recommendation.title}</strong><small>{recommendation.message}</small></span></button>)}</div>}</div>
           )}

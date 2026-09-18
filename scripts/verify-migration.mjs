@@ -52,6 +52,7 @@ try {
       "QuizAttempt",
       "QuestionAttempt",
       "LearningProgress",
+      "LearningProgressSnapshot",
       "StudyPlan",
       "StudyTask",
       "CareerProfile",
@@ -73,7 +74,7 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 14)
+    if (migration.rows[0].count !== 16)
       throw new Error("Unexpected applied migration count.");
     const memoryColumns = await verify.query(
       `SELECT column_name FROM information_schema.columns
@@ -103,7 +104,7 @@ try {
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
     console.log(
-      "Fresh PostgreSQL migration verified: 36 tables, 14 migrations, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
+      "Fresh PostgreSQL migration verified: 37 tables, 16 migrations, course workspace indexes, learning progress snapshots, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
     );
   } finally {
     await verify.end();

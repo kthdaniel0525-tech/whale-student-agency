@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { auth } from "../auth/config";
 import { db } from "../db/client";
 import {
   appendConversationMessage,
@@ -25,8 +26,17 @@ import type {
   AssistantConversationSummary,
   AssistantMessage,
   AssistantPresentation,
+  AssistantQuiz,
   AssistantRequestResponse,
 } from "@/features/student/assistant/types";
+import {
+  buildAgentActions,
+  buildWorkflowActions,
+  parseSources,
+  parseStructuredPresentation,
+  serializeSources,
+  serializeStructuredPresentation,
+} from "./presentation";
 
 const id = z.string().min(1).max(100);
 const requestSchema = z.object({
@@ -40,6 +50,12 @@ const requestSchema = z.object({
   topicId: id.optional(),
   topicName: z.string().trim().min(1).max(200).optional(),
   studyPlanId: id.optional(),
+  projectIds: z.array(id).min(1).max(10).transform((items) => [...new Set(items)]).optional(),
+  targetRole: z.string().trim().min(1).max(160).optional(),
+  targetIndustry: z.string().trim().min(1).max(120).optional(),
+  targetCompanies: z.array(z.string().trim().min(1).max(120)).max(10).optional(),
+  applicationTimeline: z.string().trim().min(1).max(100).optional(),
+  availableWeeklyMinutes: z.number().int().min(30).max(2400).optional(),
   preferredAgentId: z.enum(["tutor", "notes", "quiz", "study-planner", "academic-manager", "career"]).optional(),
   preferredWorkflowId: z.enum(["exam-preparation", "weak-topic-recovery", "lecture-study", "assignment-support", "career-preparation"]).optional(),
 }).strict();
@@ -115,10 +131,47 @@ async function hydrateWorkflow(result: Awaited<ReturnType<WorkflowService["getRu
     : typeof result.outputs.quizId === "string" ? result.outputs.quizId : undefined;
   const studyPlanId = typeof result.outputs.studyPlanId === "string" ? result.outputs.studyPlanId : undefined;
   const [quiz, studyPlan] = await Promise.all([
-    quizId ? createQuizAgentService().getQuiz(quizId, headers).catch(() => undefined) : undefined,
+    quizId ? hydrateQuizExperience(quizId, headers).catch(() => undefined) : undefined,
     studyPlanId ? createStudyPlannerAgentService().getPlan(studyPlanId, headers).catch(() => undefined) : undefined,
   ]);
   return { ...(quiz ? { quiz } : {}), ...(studyPlan ? { studyPlan } : {}) };
+}
+
+async function hydrateQuizExperience(quizId: string, headers: Headers): Promise<AssistantQuiz> {
+  const quiz = await createQuizAgentService().getQuiz(quizId, headers);
+  const session = await auth().api.getSession({ headers: new Headers(headers), query: { disableRefresh: true } });
+  if (!session?.user.id) throw new AssistantWorkspaceError("NOT_FOUND");
+  const attempt = await db().quizAttempt.findFirst({
+    where: { quizId, userId: session.user.id, quiz: { userId: session.user.id } },
+    orderBy: [{ startedAt: "desc" }, { id: "asc" }],
+    include: {
+      questionAttempts: {
+        orderBy: { attemptedAt: "asc" },
+        include: { question: { select: { correctAnswer: true, explanation: true } } },
+      },
+    },
+  });
+  return {
+    ...quiz,
+    sources: [...quiz.sources],
+    ...(attempt ? {
+      attempt: {
+        id: attempt.id,
+        completedAt: attempt.completedAt?.toISOString() ?? null,
+        evaluations: attempt.questionAttempts.map((answer) => ({
+          quizId,
+          questionId: answer.questionId,
+          quizAttemptId: attempt.id,
+          correct: answer.isCorrect,
+          score: answer.score,
+          userAnswer: answer.userAnswer,
+          feedback: answer.isCorrect ? "Correct." : `Incorrect. The correct answer is ${answer.question.correctAnswer}.`,
+          explanation: answer.question.explanation,
+          method: answer.evaluationMethod === "DETERMINISTIC" ? "deterministic" : "semantic",
+        })),
+      },
+    } : { attempt: null }),
+  };
 }
 
 export async function getAssistantBootstrap(userId: string): Promise<AssistantBootstrap> {
@@ -169,28 +222,48 @@ export async function listAssistantConversations(headers: Headers) {
 export async function getAssistantConversation(conversationId: string, headers: Headers): Promise<AssistantConversation> {
   const conversation = await getConversation(conversationId, headers, 100);
   const messages = conversation.messages.filter(visibleMessage);
-  const presentations = await Promise.all(messages.map(async (message): Promise<AssistantPresentation | undefined> => {
+  const latestWorkflowMessage = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const runId = typeof message.metadata?.workflowRunId === "string" ? message.metadata.workflowRunId : undefined;
+    if (message.role === "assistant" && runId) latestWorkflowMessage.set(runId, index);
+  });
+  const presentations = await Promise.all(messages.map(async (message, index): Promise<AssistantPresentation | undefined> => {
     if (message.role !== "assistant" || !message.metadata) return undefined;
     const targetId = typeof message.metadata.targetId === "string" ? message.metadata.targetId : undefined;
     const targetName = typeof message.metadata.targetName === "string" ? message.metadata.targetName : undefined;
     const runId = typeof message.metadata.workflowRunId === "string" ? message.metadata.workflowRunId : undefined;
     if (runId) {
+      if (latestWorkflowMessage.get(runId) !== index) return undefined;
       const workflow = await new WorkflowService().getRun(runId, headers).catch(() => undefined);
       if (!workflow) return undefined;
-      return { kind: "workflow", targetId, targetName, workflow, ...(await hydrateWorkflow(workflow, headers)) };
+      return {
+        mode: "workflow", kind: "workflow", targetId, targetName, workflow,
+        status: workflow.status,
+        actions: buildWorkflowActions(workflow, { ...(conversation.courseId ? { courseId: conversation.courseId } : {}) }),
+        ...(await hydrateWorkflow(workflow, headers)),
+      };
     }
     const artifactType = message.metadata.artifactType;
     const artifactId = typeof message.metadata.artifactId === "string" ? message.metadata.artifactId : undefined;
     if (artifactType === "quiz" && artifactId) {
       const quiz = await getAssistantQuiz(artifactId, headers).catch(() => undefined);
-      return quiz ? { kind: "agent", targetId, targetName, quiz, structuredData: quiz, sources: [...quiz.sources] } : undefined;
+      return quiz ? { mode: "agent", kind: "agent", targetId, targetName, quiz, structuredData: quiz, sources: [...(quiz.sources ?? [])], actions: [] } : undefined;
     }
     if (artifactType === "study-plan" && artifactId) {
       const studyPlan = await createStudyPlannerAgentService().getPlan(artifactId, headers).catch(() => undefined);
-      return studyPlan ? { kind: "agent", targetId, targetName, studyPlan, structuredData: studyPlan } : undefined;
+      return studyPlan ? { mode: "agent", kind: "agent", targetId, targetName, studyPlan, structuredData: studyPlan, actions: buildAgentActions("study-planner", studyPlan, { studyPlanId: artifactId, ...(conversation.courseId ? { courseId: conversation.courseId } : {}) }) } : undefined;
     }
     const kind = message.metadata.presentationKind;
-    if (kind === "agent" || kind === "clarification" || kind === "error") return { kind, targetId, targetName };
+    if (kind === "agent" || kind === "clarification" || kind === "error") {
+      const structuredData = parseStructuredPresentation(message.metadata.presentationData);
+      const sources = parseSources(message.metadata.sourceRefs);
+      return {
+        mode: "agent", kind, targetId, targetName,
+        ...(structuredData !== undefined ? { structuredData } : {}),
+        ...(sources.length ? { sources } : {}),
+        actions: targetId ? buildAgentActions(targetId, structuredData, { ...(conversation.courseId ? { courseId: conversation.courseId } : {}) }) : [],
+      };
+    }
     return undefined;
   }));
   return {
@@ -223,7 +296,12 @@ export async function executeAssistantRequest(
   const existingAssistant = existing.find((message) => message.role === "assistant" && message.turnId === requested.turnId && message.metadata?.workspaceVisible === true);
   const existingUser = existing.find((message) => message.role === "user" && message.turnId === requested.turnId && message.metadata?.workspaceVisible === true);
   if (existingAssistant && existingUser) {
-    return { conversation: publicConversation(conversation), userMessage: publicMessage(existingUser), assistantMessage: publicMessage(existingAssistant) };
+    const hydrated = await getAssistantConversation(conversation.id, headers);
+    return {
+      conversation: publicConversation(conversation),
+      userMessage: hydrated.messages.find((message) => message.id === existingUser.id) ?? publicMessage(existingUser),
+      assistantMessage: hydrated.messages.find((message) => message.id === existingAssistant.id) ?? publicMessage(existingAssistant),
+    };
   }
 
   const execution = await (options.execute ?? handleUserAIRequest)({
@@ -241,26 +319,45 @@ export async function executeAssistantRequest(
   }, headers);
   let presentation: AssistantPresentation;
   let assistantMetadata: Record<string, string | number | boolean | null>;
+  const actionContext = {
+    ...(requested.courseId ? { courseId: requested.courseId } : {}),
+    ...(requested.documentIds ? { documentIds: requested.documentIds } : {}),
+    ...(requested.assignmentId ? { assignmentId: requested.assignmentId } : {}),
+    ...(requested.examId ? { examId: requested.examId } : {}),
+    ...(requested.topicId ? { topicId: requested.topicId } : {}),
+    ...(requested.topicName ? { topicName: requested.topicName } : {}),
+    ...(requested.studyPlanId ? { studyPlanId: requested.studyPlanId } : {}),
+    ...(requested.projectIds ? { projectIds: requested.projectIds } : {}),
+    ...(requested.targetRole ? { targetRole: requested.targetRole } : {}),
+    ...(requested.targetIndustry ? { targetIndustry: requested.targetIndustry } : {}),
+    ...(requested.targetCompanies ? { targetCompanies: requested.targetCompanies } : {}),
+    ...(requested.applicationTimeline ? { applicationTimeline: requested.applicationTimeline } : {}),
+    ...(requested.availableWeeklyMinutes ? { availableWeeklyMinutes: requested.availableWeeklyMinutes } : {}),
+  };
   if (execution.needsClarification) {
-    presentation = { kind: "clarification" };
+    presentation = { mode: "agent", kind: "clarification", actions: [] };
     assistantMetadata = metadata({ presentationKind: "clarification" });
   } else if (execution.mode === "workflow") {
     const related = await hydrateWorkflow(execution.result, headers);
-    presentation = { kind: "workflow", targetId: execution.target.id, targetName: execution.target.name, workflow: execution.result, ...related };
+    presentation = { mode: "workflow", kind: "workflow", targetId: execution.target.id, targetName: execution.target.name, workflow: execution.result, status: execution.result.status, actions: buildWorkflowActions(execution.result, actionContext), ...related };
     assistantMetadata = metadata({ presentationKind: "workflow", targetId: execution.target.id, targetName: execution.target.name, workflowRunId: execution.result.runId });
   } else if (execution.result.ok) {
     const structuredData = execution.result.response.structuredData;
+    const sources = [...execution.result.response.sources];
     const artifact = agentArtifact(execution.target.id, structuredData);
+    const sourceRefs = serializeSources(sources);
+    const presentationData = serializeStructuredPresentation(execution.target.id, structuredData);
     presentation = {
-      kind: "agent", targetId: execution.target.id, targetName: execution.target.name,
+      mode: "agent", kind: "agent", targetId: execution.target.id, targetName: execution.target.name,
       ...(structuredData !== undefined ? { structuredData } : {}),
       ...(execution.target.id === "quiz" && structuredData ? { quiz: structuredData as AssistantPresentation["quiz"] } : {}),
       ...(execution.target.id === "study-planner" && structuredData ? { studyPlan: structuredData as AssistantPresentation["studyPlan"] } : {}),
-      sources: [...execution.result.response.sources],
+      sources,
+      actions: buildAgentActions(execution.target.id, structuredData, actionContext),
     };
-    assistantMetadata = metadata({ presentationKind: "agent", targetId: execution.target.id, targetName: execution.target.name, ...artifact });
+    assistantMetadata = metadata({ presentationKind: "agent", targetId: execution.target.id, targetName: execution.target.name, ...artifact, ...(sourceRefs ? { sourceRefs } : {}), ...(presentationData ? { presentationData } : {}) });
   } else {
-    presentation = { kind: "error", targetId: execution.target.id, targetName: execution.target.name };
+    presentation = { mode: "agent", kind: "error", targetId: execution.target.id, targetName: execution.target.name, actions: [] };
     assistantMetadata = metadata({ presentationKind: "error", targetId: execution.target.id, targetName: execution.target.name });
   }
   const assistantMessage = await appendConversationMessage({
@@ -373,6 +470,7 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
       ...(requested.courseId ? { courseId: requested.courseId } : {}),
       ...(requested.examId ? { examId: requested.examId } : {}),
       ...(requested.assignmentId ? { assignmentId: requested.assignmentId } : {}),
+      ...(requested.projectIds ? { projectIds: requested.projectIds } : {}),
       ...(requested.documentIds?.length ? { documentIds: requested.documentIds } : {}),
       conversation: { id: conversationId },
     }, headers);
@@ -383,17 +481,29 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
       send({ type: "delta", text: next.value.text });
     }
     const userMessage = await appendConversationMessage({ conversationId, role: "user", content: requested.request, turnId: requested.turnId, metadata: metadata({ ...(requested.courseId ? { courseId: requested.courseId } : {}) }) }, headers);
-    const assistantMetadata = metadata({ presentationKind: "agent", targetId: decision.targetId, targetName: registry.get(decision.targetId).name });
+    const sources = [...(execution.sources ?? [])];
+    const sourceRefs = serializeSources(sources);
+    const assistantMetadata = metadata({ presentationKind: "agent", targetId: decision.targetId, targetName: registry.get(decision.targetId).name, ...(sourceRefs ? { sourceRefs } : {}) });
     const assistantMessage = await appendConversationMessage({ conversationId, role: "assistant", content: execution.content, turnId: requested.turnId, agentId: decision.targetId, metadata: assistantMetadata }, headers);
     const updated = await getConversation(conversationId, headers, 0);
-    const presentation: AssistantPresentation = { kind: "agent", targetId: decision.targetId, targetName: registry.get(decision.targetId).name, sources: [...(execution.sources ?? [])] };
+    const presentation: AssistantPresentation = {
+      mode: "agent", kind: "agent", targetId: decision.targetId,
+      targetName: registry.get(decision.targetId).name,
+      sources,
+      actions: buildAgentActions(decision.targetId, undefined, {
+        ...(requested.courseId ? { courseId: requested.courseId } : {}),
+        ...(requested.documentIds ? { documentIds: requested.documentIds } : {}),
+        ...(requested.assignmentId ? { assignmentId: requested.assignmentId } : {}),
+        ...(requested.examId ? { examId: requested.examId } : {}),
+      }),
+    };
     const data: AssistantRequestResponse = { conversation: publicConversation(updated), userMessage: publicMessage(userMessage), assistantMessage: publicMessage(assistantMessage, presentation) };
     send({ type: "result", data });
   });
 }
 
 export async function getAssistantQuiz(quizId: string, headers: Headers) {
-  return createQuizAgentService().getQuiz(quizId, headers);
+  return hydrateQuizExperience(quizId, headers);
 }
 
 export async function evaluateAssistantQuizAnswer(quizId: string, raw: unknown, headers: Headers) {
@@ -420,7 +530,27 @@ export async function resumeAssistantWorkflow(userId: string, runId: string, raw
   if (!parsed.success) throw new AssistantWorkspaceError("INVALID_REQUEST");
   const run = await db().workflowRun.findFirst({ where: { id: runId, userId }, select: { id: true, context: true } });
   if (!run) throw new AssistantWorkspaceError("NOT_FOUND");
-  const context = run.context as { conversationId?: string };
+  const context = run.context as { conversationId?: string; courseId?: string };
+  if (context.conversationId) {
+    const conversation = await getConversation(context.conversationId, headers, 100);
+    const existingUser = conversation.messages.find((message) => message.role === "user" && message.turnId === parsed.data.turnId && message.metadata?.workspaceVisible === true);
+    const existingAssistant = conversation.messages.find((message) => message.role === "assistant" && message.turnId === parsed.data.turnId && message.metadata?.workspaceVisible === true);
+    if (existingUser && existingAssistant) {
+      const current = await new WorkflowService().getRun(runId, headers);
+      const currentRelated = await hydrateWorkflow(current, headers);
+      return {
+        workflow: current,
+        ...currentRelated,
+        userMessage: publicMessage(existingUser),
+        assistantMessage: publicMessage(existingAssistant, {
+          mode: "workflow", kind: "workflow", targetId: current.workflowId,
+          targetName: current.workflowId, workflow: current, status: current.status,
+          actions: buildWorkflowActions(current, { ...(context.courseId ? { courseId: context.courseId } : {}) }),
+          ...currentRelated,
+        }),
+      };
+    }
+  }
   const input = parsed.data.userWork
     ? { runId, userWork: parsed.data.userWork }
     : parsed.data.quizAttemptId
@@ -433,7 +563,17 @@ export async function resumeAssistantWorkflow(userId: string, runId: string, raw
   const userText = parsed.data.userWork ?? (parsed.data.quizAttemptId ? "Completed the quiz." : "Added my career information.");
   const userMessage = await appendConversationMessage({ conversationId: context.conversationId, role: "user", content: userText, turnId: parsed.data.turnId, metadata: metadata({ workflowResume: true }) }, headers);
   const assistantMessage = await appendConversationMessage({ conversationId: context.conversationId, role: "assistant", content: result.summary, turnId: parsed.data.turnId, metadata: metadata({ presentationKind: "workflow", workflowRunId: result.runId, targetId: result.workflowId, targetName: result.workflowId }) }, headers);
-  return { workflow: result, ...related, userMessage: publicMessage(userMessage), assistantMessage: publicMessage(assistantMessage, { kind: "workflow", targetId: result.workflowId, targetName: result.workflowId, workflow: result, ...related }) };
+  return {
+    workflow: result,
+    ...related,
+    userMessage: publicMessage(userMessage),
+    assistantMessage: publicMessage(assistantMessage, {
+      mode: "workflow", kind: "workflow", targetId: result.workflowId,
+      targetName: result.workflowId, workflow: result, status: result.status,
+      actions: buildWorkflowActions(result, { ...(context.courseId ? { courseId: context.courseId } : {}) }),
+      ...related,
+    }),
+  };
 }
 
 export async function updateAssistantStudyTask(taskId: string, rawStatus: unknown, headers: Headers) {

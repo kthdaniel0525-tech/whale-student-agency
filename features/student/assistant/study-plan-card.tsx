@@ -1,21 +1,32 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarDays, Check, Clock3, Loader2, SkipForward } from "lucide-react";
+import { CalendarDays, Check, Clock3, Loader2, Play, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { AssistantStudyPlan, AssistantStudyTask } from "./types";
+import { studyTaskStartAction } from "./interaction-contract";
+import type { AssistantAction, AssistantStudyPlan, AssistantStudyTask } from "./types";
 
 function humanDate(value: string) {
   return new Intl.DateTimeFormat("en", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value.slice(0, 10)}T12:00:00Z`));
 }
 
-export function StudyPlanCard({ initialPlan }: { initialPlan: AssistantStudyPlan }) {
+export function StudyPlanCard({
+  initialPlan,
+  onAction,
+  onPlanChange,
+}: {
+  initialPlan: AssistantStudyPlan;
+  onAction?: (action: AssistantAction) => void | Promise<void>;
+  onPlanChange?: (plan: AssistantStudyPlan) => void;
+}) {
   const [plan, setPlan] = useState(initialPlan);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const days = plan.days ?? (plan.sessions ? [{ date: plan.date ?? new Date().toISOString().slice(0, 10), totalMinutes: plan.totalMinutes ?? 0, sessions: plan.sessions as AssistantStudyTask[] }] : []);
+  const tasks = days.flatMap((day) => day.sessions);
+  const completed = tasks.filter((task) => task.status === "completed").length;
 
-  async function updateTask(taskId: string, status: "completed" | "skipped") {
+  async function updateTask(taskId: string, status: "in-progress" | "completed" | "skipped") {
     setBusy(taskId);
     setError(undefined);
     try {
@@ -23,11 +34,18 @@ export function StudyPlanCard({ initialPlan }: { initialPlan: AssistantStudyPlan
       const body = await response.json() as AssistantStudyPlan & { error?: string };
       if (!response.ok) throw new Error(body.error || "The study task could not be updated.");
       setPlan(body);
+      onPlanChange?.(body);
+      return body;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The study task could not be updated.");
     } finally {
       setBusy(undefined);
     }
+  }
+
+  async function startTask(task: AssistantStudyTask) {
+    const updated = await updateTask(task.id, "in-progress");
+    if (updated && onAction) await onAction(studyTaskStartAction({ ...task, status: "in-progress" }));
   }
 
   return (
@@ -39,6 +57,7 @@ export function StudyPlanCard({ initialPlan }: { initialPlan: AssistantStudyPlan
         {(plan.startDate || plan.date) && <span className="flex items-center gap-1"><CalendarDays size={15} /> {plan.startDate ? `${humanDate(plan.startDate)}${plan.endDate && plan.endDate !== plan.startDate ? ` – ${humanDate(plan.endDate)}` : ""}` : humanDate(plan.date!)}</span>}
         <span className="flex items-center gap-1"><Clock3 size={15} /> {plan.totalPlannedMinutes ?? plan.totalMinutes ?? 0} minutes</span>
       </div>
+      {tasks.length > 0 && <div className="mt-4"><div className="mb-1 flex justify-between text-xs muted"><span>Plan progress</span><span>{completed} of {tasks.length} completed</span></div><div className="assistant-progress" role="progressbar" aria-label="Study plan progress" aria-valuemin={0} aria-valuemax={tasks.length} aria-valuenow={completed}><span style={{ width: `${completed / tasks.length * 100}%` }} /></div></div>}
       <div className="mt-5 space-y-4">
         {days.map((day) => (
           <div key={day.date}>
@@ -48,10 +67,11 @@ export function StudyPlanCard({ initialPlan }: { initialPlan: AssistantStudyPlan
                 <div key={task.id ?? `${day.date}-${index}`} className="py-3">
                   <div className="flex items-start gap-3">
                     <span className="assistant-activity">{task.activityType}</span>
-                    <div className="min-w-0 flex-1"><p className="font-medium">{task.title}</p><p className="text-sm muted">{task.topic ?? task.courseName} · {task.durationMinutes} min</p><p className="mt-1 text-xs muted">{task.reason}</p></div>
+                    <div className="min-w-0 flex-1"><p className="font-medium">{task.title}</p><p className="text-sm muted">{task.topic ?? task.courseName} · {task.durationMinutes} min · priority {task.priority}</p><p className="mt-1 text-xs muted">{task.reason}</p></div>
                   </div>
                   {task.id && task.status !== "completed" && task.status !== "skipped" && (
-                    <div className="mt-2 flex gap-2 pl-0 sm:pl-20">
+                    <div className="mt-2 flex flex-wrap gap-2 pl-0 sm:pl-20">
+                      <Button size="sm" disabled={Boolean(busy)} onClick={() => startTask(task)}>{busy === task.id ? <Loader2 className="animate-spin" /> : <Play />} {task.status === "in-progress" ? "Continue session" : "Start session"}</Button>
                       <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => updateTask(task.id, "completed")}>{busy === task.id ? <Loader2 className="animate-spin" /> : <Check />} Complete</Button>
                       <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => updateTask(task.id, "skipped")}><SkipForward /> Skip</Button>
                     </div>

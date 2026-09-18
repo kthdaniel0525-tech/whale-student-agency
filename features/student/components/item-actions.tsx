@@ -65,7 +65,7 @@ export function DeleteItem({
         <AlertDialogTitle>Delete this {kind}?</AlertDialogTitle>
         <AlertDialogDescription>
           {kind === "course"
-            ? "Its assignments, exams, documents and indexed passages will also be permanently deleted."
+            ? "Its assignments, exams, documents, indexed passages, and learning progress will be permanently deleted. Existing study tasks will remain without the course link."
             : "This cannot be undone."}
         </AlertDialogDescription>
         {error && (

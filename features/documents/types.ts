@@ -16,6 +16,7 @@ export type DocumentItem = {
   embeddingModel: string | null;
   createdAt: string;
   updatedAt: string;
+  category?: "Lecture" | "Syllabus" | "Reading" | "Notes" | "Other";
   course: CourseOption | null;
   _count: { chunks: number };
 };

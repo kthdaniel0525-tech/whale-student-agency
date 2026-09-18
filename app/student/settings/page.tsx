@@ -1,8 +1,14 @@
+import Link from "next/link";
+import { headers } from "next/headers";
+import { Brain, ShieldCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { requirePageUser } from "@/server/auth/session";
+import { listMemories } from "@/server/memory";
 import { ProfileForm } from "@/features/student/components/profile-form";
-import { EmptyState } from "@/features/student/components/empty-state";
 export default async function Settings() {
   const { user, profile } = await requirePageUser();
+  const memories = await listMemories({ status: "active", limit: 100 }, await headers()).catch(() => []);
+  const categories = new Set(memories.map((memory) => memory.category)).size;
   return (
     <>
       <div className="page-heading">
@@ -29,11 +35,13 @@ export default async function Settings() {
         />
       </section>
       <section className="panel mt-6 max-w-4xl">
-        <h2>AI memory</h2>
-        <EmptyState
-          title="Memory settings are not available yet"
-          description="Your profile preferences are saved above. No AI conversation memory is being collected."
-        />
+        <div className="settings-memory-heading"><div><p className="eyebrow">Personalization</p><h2>AI context &amp; memory</h2></div><Brain /></div>
+        <p className="settings-memory-copy">Your assistant can use your saved profile, conversation history, and supported learning preferences to keep help relevant across sessions.</p>
+        <div className="settings-memory-summary" role="status">
+          <ShieldCheck />
+          <div><strong>{memories.length ? `${memories.length} active ${memories.length === 1 ? "memory" : "memories"}` : "No active memories yet"}</strong><span>{memories.length ? `Across ${categories} ${categories === 1 ? "category" : "categories"}. Context is scoped to your account.` : "Personalization will grow from explicit preferences and supported activity in your account."}</span></div>
+        </div>
+        <Button asChild variant="outline" size="sm"><Link href="/student/assistant">Open AI Assistant</Link></Button>
       </section>
     </>
   );

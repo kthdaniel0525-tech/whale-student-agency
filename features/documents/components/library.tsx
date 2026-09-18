@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { FileText, Search } from "lucide-react";
+import { FileText, Search, Sparkles } from "lucide-react";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,6 +16,15 @@ const labels = {
   READY: "Ready",
   FAILED: "Processing failed",
 };
+function category(item: DocumentItem) {
+  if (item.category) return item.category;
+  const value = `${item.title} ${item.originalFileName}`.toLowerCase();
+  if (/syllabus|course outline/.test(value)) return "Syllabus";
+  if (/lecture|week\s*\d|class\s*\d|slides?/.test(value)) return "Lecture";
+  if (/notes?|summary|review sheet/.test(value)) return "Notes";
+  if (/reading|chapter|article|textbook/.test(value)) return "Reading";
+  return "Other";
+}
 export function ProcessingStatus({
   status,
 }: {
@@ -33,16 +42,22 @@ export function DocumentLibrary({
   courses,
   courseId,
   initial,
+  aiActions = false,
+  onDocumentsChanged,
 }: {
   courses: CourseOption[];
   courseId?: string;
   initial: DocumentItem[];
+  aiActions?: boolean;
+  onDocumentsChanged?: (documents: DocumentItem[]) => void;
 }) {
   const version = useRef(0);
   const [selected, setSelected] = useState(courseId || "");
   const [items, setItems] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
   const reload = useCallback(
     async (filter = selected) => {
       const current = ++version.current;
@@ -53,6 +68,7 @@ export function DocumentLibrary({
         );
         if (current !== version.current) return;
         setItems(data);
+        onDocumentsChanged?.(data);
         setError("");
       } catch (e) {
         if (current === version.current)
@@ -63,7 +79,7 @@ export function DocumentLibrary({
         if (current === version.current) setBusy(false);
       }
     },
-    [selected],
+    [onDocumentsChanged, selected],
   );
   useEffect(() => {
     if (
@@ -75,6 +91,17 @@ export function DocumentLibrary({
     const timer = setInterval(() => void reload(), 2500);
     return () => clearInterval(timer);
   }, [items, reload]);
+  const visible = items.filter((item) => {
+    const matchesQuery = !query.trim() || `${item.title} ${item.originalFileName} ${category(item)}`.toLowerCase().includes(query.trim().toLowerCase());
+    return matchesQuery && (!status || item.processingStatus === status);
+  });
+  const assistantUrl = (item: DocumentItem, prompt: string, target: { agent?: string; workflow?: string }) => {
+    const params = new URLSearchParams({ prompt, documentId: item.id });
+    if (item.courseId) params.set("courseId", item.courseId);
+    if (target.agent) params.set("agent", target.agent);
+    if (target.workflow) params.set("workflow", target.workflow);
+    return `/student/assistant?${params.toString()}`;
+  };
   return (
     <section className={courseId ? "" : "panel"}>
       <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
@@ -116,6 +143,10 @@ export function DocumentLibrary({
           Open retrieval playground
         </Link>
       )}
+      {courseId && items.length > 0 && <div className="document-library-filters">
+        <div className="field"><label htmlFor={`document-search-${courseId}`}>Search documents</label><div className="document-search-input"><Search /><input id={`document-search-${courseId}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title or file name" /></div></div>
+        <div className="field"><label htmlFor={`document-status-${courseId}`}>Status</label><NativeSelect id={`document-status-${courseId}`} value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="READY">Ready</option><option value="PROCESSING">Processing</option><option value="UPLOADED">Queued</option><option value="FAILED">Failed</option></NativeSelect></div>
+      </div>}
       {error && (
         <div role="alert" className="field-error mb-4">
           {error}
@@ -126,9 +157,9 @@ export function DocumentLibrary({
       )}
       {busy ? (
         <Skeleton className="h-28" />
-      ) : items.length ? (
+      ) : visible.length ? (
         <div>
-          {items.map((d) => (
+          {visible.map((d) => (
             <article key={d.id} className="py-5 border-b last:border-0">
               <div className="flex gap-4 items-start">
                 <FileText className="text-primary shrink-0 mt-1" size={21} />
@@ -140,8 +171,8 @@ export function DocumentLibrary({
                     {d.title}
                   </Link>
                   <p className="muted text-sm mt-1">
-                    {d.course?.courseCode || "General material"} · {d.fileType}{" "}
-                    · {Math.ceil(d.fileSize / 1024)} KB ·{" "}
+                    {category(d)} · {d.course?.courseCode || "General material"} · {d.fileType}{" "}
+                    · {Math.ceil(d.fileSize / 1024)} KB{d.pageCount ? ` · ${d.pageCount} pages` : ""} ·{" "}
                     {new Date(d.createdAt).toLocaleDateString("en")}
                   </p>
                   <div className="flex gap-3 items-center flex-wrap mt-3">
@@ -160,11 +191,20 @@ export function DocumentLibrary({
                       onChange={() => void reload()}
                     />
                   </div>
+                  {aiActions && d.processingStatus === "READY" && <div className="document-ai-actions" aria-label={`AI actions for ${d.title}`}>
+                    <Button asChild size="sm"><Link href={assistantUrl(d, `Study ${d.title} as a lecture and help me learn its key concepts.`, { workflow: "lecture-study" })}><Sparkles /> Study lecture</Link></Button>
+                    <Button asChild size="sm" variant="outline"><Link href={assistantUrl(d, `Summarize ${d.title} into useful course notes.`, { agent: "notes" })}>Summarize</Link></Button>
+                    <Button asChild size="sm" variant="outline"><Link href={assistantUrl(d, `Make structured notes from ${d.title}.`, { agent: "notes" })}>Make notes</Link></Button>
+                    <Button asChild size="sm" variant="outline"><Link href={assistantUrl(d, `Create a quiz from ${d.title}.`, { agent: "quiz" })}>Quiz me</Link></Button>
+                    <Button asChild size="sm" variant="ghost"><Link href={assistantUrl(d, `Help me with ${d.title}.`, {})}>Ask AI</Link></Button>
+                  </div>}
                 </div>
               </div>
             </article>
           ))}
         </div>
+      ) : items.length ? (
+        <EmptyState title="No matching documents" description="Try another title or processing status." />
       ) : (
         <EmptyState
           title="Build your course library"

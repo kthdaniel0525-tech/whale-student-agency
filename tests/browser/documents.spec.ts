@@ -54,6 +54,7 @@ test("uploads a course PDF, reads extracted pages, searches cited passages and d
     expect(course.ok()).toBe(true);
     const courseId = (await course.json()).id;
     await page.goto(`/student/courses/${courseId}`);
+    await page.getByRole("tab", { name: /^Documents/ }).click();
     await page
       .getByRole("button", { name: "Upload document", exact: true })
       .click();

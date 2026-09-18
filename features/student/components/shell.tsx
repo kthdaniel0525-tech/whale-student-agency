@@ -75,8 +75,10 @@ export function Shell({
   name: string;
   semester: string;
 }) {
+  const path = usePathname();
   const { resolvedTheme, setTheme } = useTheme();
   const [busy, setBusy] = useState(false);
+  const currentPage = links.find(([, href]) => href === "/student" ? path === href : path.startsWith(href))?.[0] ?? "Student workspace";
   async function signOut() {
     setBusy(true);
     try {
@@ -130,8 +132,8 @@ export function Shell({
       </Sidebar>
       <SidebarInset className="bg-background min-w-0">
         <header className="h-18 px-6 md:px-10 flex items-center gap-3 border-b bg-card">
-          <SidebarTrigger />
-          <span className="text-sm muted">My workspace</span>
+          <SidebarTrigger aria-label="Open navigation" />
+          <span className="text-sm font-medium text-foreground">{currentPage}</span>
           <span className="ml-auto text-sm muted hidden sm:inline">
             {semester}
           </span>

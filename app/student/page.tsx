@@ -8,7 +8,7 @@ import { SmartDashboard } from "@/features/student/dashboard/smart-dashboard";
 async function DashboardContent() {
   const { user } = await requirePageUser();
   const data = await getStudentDashboard(user.id, await headers());
-  return <SmartDashboard initial={data} />;
+  return <SmartDashboard key={data.generatedAt} initial={data} />;
 }
 
 function DashboardLoading() {

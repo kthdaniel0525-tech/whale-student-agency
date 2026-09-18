@@ -16,6 +16,9 @@ test("uses the AI workspace with context, rich responses, quiz feedback, and mob
     expect((await page.request.put("/api/student/profile", { headers, data: { name: "AI Workspace Student", school: "Test University", program: "Mathematics", currentYear: 2, semester: "Fall 2026", academicGoal: "Master proofs", studySessionMinutes: 45, explanationDifficulty: "INTERMEDIATE", timezone: "America/Winnipeg" } })).ok()).toBe(true);
     const courseResponse = await page.request.post("/api/student/courses", { headers, data: { courseCode: "MATH 1240", courseName: "Discrete Mathematics", semester: "Fall 2026", professor: "", description: "" } });
     const courseId = (await courseResponse.json()).id as string;
+    const savedConversationId = randomUUID();
+    await pool.query(`INSERT INTO "Conversation" ("id","userId","courseId","title","messageCount","nextMessageSequence","lastMessageAt","createdAt","updatedAt") VALUES ($1,$2,$3,'Saved induction help',2,3,NOW(),NOW(),NOW())`, [savedConversationId, userId, courseId]);
+    await pool.query(`INSERT INTO "ConversationMessage" ("id","conversationId","userId","sequence","role","content","metadata","tokenEstimate","createdAt") VALUES ($1,$2,$3,1,'USER','Remind me how induction starts.',$4,8,NOW()),($5,$2,$3,2,'ASSISTANT','A saved answer begins with the base case.',$4,9,NOW())`, [randomUUID(), savedConversationId, userId, JSON.stringify({ workspaceVisible: true }), randomUUID()]);
 
     let requestCount = 0;
     await page.route("**/api/student/assistant/requests/stream", async (route) => {
@@ -51,6 +54,7 @@ test("uses the AI workspace with context, rich responses, quiz feedback, and mob
     await composer.fill("Explain induction from my course.");
     await composer.press("Enter");
     await expect(page.getByText("Start with the base case, then prove the inductive step.")).toBeVisible();
+    await expect(page).toHaveURL(/conversationId=browser-conversation/);
     await expect(page.locator('[data-slot="message-header"]').getByText("Tutor", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Lecture 4 · p. 7" })).toBeVisible();
 
@@ -69,6 +73,12 @@ test("uses the AI workspace with context, rich responses, quiz feedback, and mob
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.getByRole("button", { name: "Open conversation history" }).click();
     await expect(page.getByRole("complementary", { name: "Conversation history" })).toBeVisible();
+
+    await page.goto(`/student/assistant?conversationId=${savedConversationId}`);
+    await expect(page.getByRole("region", { name: "AI conversation" }).getByText("A saved answer begins with the base case.")).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("region", { name: "AI conversation" }).getByText("A saved answer begins with the base case.")).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`conversationId=${savedConversationId}`));
   } finally {
     if (userId) await pool.query('DELETE FROM "User" WHERE id=$1 AND email=$2', [userId, email]);
     await pool.end();
