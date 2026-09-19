@@ -158,6 +158,7 @@ export class AgentRouter<Extension extends string = never> {
     try {
       const provider = await this.#getProvider();
       const response = await provider.generateStructuredOutput({
+        usageContext: { operationType: "routing", agentId: null },
         schemaName: "agent_route",
         schema,
         maxOutputTokens: 128,

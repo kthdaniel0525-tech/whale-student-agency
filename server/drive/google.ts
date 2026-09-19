@@ -64,15 +64,16 @@ export class GoogleDriveService {
             const page = z.object({ files: z.array(z.unknown()).max(30).default([]), nextPageToken: z.string().max(2048).optional() }).safeParse(data);
             if (!page.success)
                 throw new IntegrationError("INVALID_RESPONSE");
+            if (page.data.nextPageToken && page.data.nextPageToken === input.pageToken) throw new IntegrationError("INVALID_RESPONSE");
             return { files: page.data.files.map(file => normalize(file, connectedAccountId)), nextPageToken: page.data.nextPageToken ?? null };
         });
         await updateIntegrationSyncState(userId, connectedAccountId, "drive-read", { status: "COMPLETED" });
         return result;
     }
-    async metadata(userId: string, connectedAccountId: string, externalFileId: string) {
+    async metadata(userId: string, connectedAccountId: string, externalFileId: string, signal?: AbortSignal) {
         driveFileId.parse(externalFileId);
         return withProviderClient({ userId, connectedAccountId, provider: "google", capability: "drive-read" }, async (client) => {
-            const file = normalize(await client.read({ path: `files/${externalFileId}`, query: { fields, supportsAllDrives: "true" } }), connectedAccountId);
+            const file = normalize(await client.read({ path: `files/${externalFileId}`, signal, query: { fields, supportsAllDrives: "true" } }), connectedAccountId);
             if (file.externalId !== externalFileId)
                 throw new IntegrationError("INVALID_RESPONSE");
             if (file.unavailableReason === "The source is in the trash.")
@@ -80,13 +81,13 @@ export class GoogleDriveService {
             return file;
         });
     }
-    async download(userId: string, file: ExternalDriveFile) {
+    async download(userId: string, file: ExternalDriveFile, signal?: AbortSignal) {
         if (!file.importable)
             throw new IntegrationError(file.size !== null && file.size > MAX_FILE_BYTES ? "FILE_TOO_LARGE" : "INVALID_REQUEST");
         return withProviderClient({ userId, connectedAccountId: file.connectedAccountId, provider: "google", capability: "drive-read" }, async (client) => {
             if (!client.download)
                 throw new IntegrationError("INVALID_REQUEST");
-            return client.download({ path: `files/${file.externalId}${file.exportable ? "/export" : ""}`, maxBytes: MAX_FILE_BYTES,
+            return client.download({ path: `files/${file.externalId}${file.exportable ? "/export" : ""}`, maxBytes: MAX_FILE_BYTES, signal,
                 query: file.exportable ? { mimeType: "application/pdf" } : { alt: "media", supportsAllDrives: "true" } });
         });
     }

@@ -3,7 +3,7 @@ export interface IntegrationTokens {
   accessToken: string; refreshToken?: string; expiresInSeconds: number; scopes?: string[];
 }
 export interface IntegrationIdentity { id: string; displayName: string | null; email: string | null; }
-export interface ProviderReadRequest { capability: IntegrationCapability; path: string; query?: Record<string, string>; }
+export interface ProviderReadRequest { capability: IntegrationCapability; path: string; query?: Record<string, string>; signal?: AbortSignal; }
 export interface ProviderDownloadRequest extends ProviderReadRequest { maxBytes: number; }
 export interface ProviderWriteRequest extends ProviderReadRequest { method: "POST" | "PATCH" | "DELETE"; body?: Record<string, unknown>; }
 export interface IntegrationProvider {

@@ -13,7 +13,7 @@ export function createAcademicHttp(service = academicIntegrationService) {
         if (cause instanceof z.ZodError || cause instanceof RequestError || cause instanceof NotFoundError)
             throw cause;
         const error = academicError(cause);
-        return Response.json({ error: error.message, code: error.code }, { status: error.status });
+        return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: error.code === "PROVIDER_RATE_LIMITED" ? { "Retry-After": "60" } : {} });
     } });
     return {
         settings: (req: Request) => call(req, userId => service.settings(userId)),

@@ -88,7 +88,7 @@ async function persistSemanticEmbedding(
   try {
     const provider = await embeddingProvider(options);
     if (!provider) return;
-    const response = await provider.generateEmbedding({ input: `${row.key}: ${row.value}`, dimensions: 384 });
+    const response = await provider.generateEmbedding({ input: `${row.key}: ${row.value}`, dimensions: 384, usageContext: { userId: row.userId, source: "memory-index" } });
     if (row.embeddingModel === response.model && row.embeddingValueHash === hash) return;
     const { validateEmbedding } = await import("../documents/embeddings");
     const vector = JSON.stringify(validateEmbedding(response.vector));
@@ -115,7 +115,7 @@ async function semanticSimilarities(
   try {
     const provider = await embeddingProvider(options);
     if (!provider) return new Map();
-    const response = await provider.generateEmbedding({ input: input.request, dimensions: 384 });
+    const response = await provider.generateEmbedding({ input: input.request, dimensions: 384, usageContext: { userId: input.userId, source: "memory-query" } });
     const ids = candidates.filter((row) => row.embeddingModel === response.model).map((row) => row.id);
     if (!ids.length) return new Map();
     const { validateEmbedding } = await import("../documents/embeddings");

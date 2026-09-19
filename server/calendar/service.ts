@@ -1,4 +1,5 @@
 import "server-only";
+import { recordIntegrationMetric } from "../integrations/metrics";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ExternalCalendarEvent, CalendarSettings } from "@/lib/student/calendar/types";
@@ -27,21 +28,21 @@ export function createGoogleCalendarService(options: {
     const integration = options.integration ?? createIntegrationService();
     const encryption = options.encryption ?? getTokenEncryptionService;
     const now = options.now ?? (() => new Date());
-    const using = <T>(userId: string, accountId: string, capability: "calendar-read" | "calendar-write", fn: (adapter: GoogleCalendarAdapter) => Promise<T>) => integration.withProviderClient({ userId, connectedAccountId: accountId, provider: "google", capability }, client => fn(new GoogleCalendarAdapter(client)));
+    const using = <T>(userId: string, accountId: string, capability: "calendar-read" | "calendar-write", fn: (adapter: GoogleCalendarAdapter) => Promise<T>, signal?: AbortSignal) => integration.withProviderClient({ userId, connectedAccountId: accountId, provider: "google", capability }, client => fn(new GoogleCalendarAdapter(client, signal)));
     async function assertRead(userId: string, accountId: string) { await using(userId, accountId, "calendar-read", async () => { }); }
     const listCalendars = (userId: string, accountId: string) => protectIntegration(() => using(userId, accountId, "calendar-read", adapter => adapter.listCalendars()));
     const getSettings = (userId: string, accountId: string, discover = false): Promise<CalendarSettings> => protectIntegration(async () => {
-        const account = await integration.getConnectedAccount(userId, accountId);
+        const account = await integration.getConnectedAccount(userId, accountId, "calendar-read");
         const [stored, state] = await Promise.all([db().calendarIntegrationPreference.findMany({ where: { userId, connectedAccountId: accountId } }), db().integrationSyncState.findUnique({ where: { connectedAccountId_integrationType: { connectedAccountId: accountId, integrationType: "calendar-read" } } })]);
         const calendars = discover ? await listCalendars(userId, accountId) : stored.map(c => ({ id: c.externalCalendarId, title: c.title, timezone: c.timezone, canWrite: c.allowStudyWrites }));
-        return { calendars: calendars.map(c => { const p = stored.find(p => p.externalCalendarId === c.id); return { ...c, canWrite: c.canWrite && account.capabilities.includes("calendar-write"), enabledForAvailability: p?.enabledForAvailability ?? false, allowStudyWrites: p?.allowStudyWrites ?? false, blockAllDay: p?.blockAllDay ?? false }; }), sync: state ? { status: state.status, lastSuccessfulSyncAt: state.lastSuccessfulSyncAt?.toISOString() ?? null, lastErrorCode: state.lastErrorCode } : null };
+        return { health: account.health, calendars: calendars.map(c => { const p = stored.find(p => p.externalCalendarId === c.id); return { ...c, canWrite: c.canWrite && account.capabilities.includes("calendar-write"), enabledForAvailability: p?.enabledForAvailability ?? false, allowStudyWrites: p?.allowStudyWrites ?? false, blockAllDay: p?.blockAllDay ?? false }; }), sync: state ? { status: state.status, lastSuccessfulSyncAt: state.lastSuccessfulSyncAt?.toISOString() ?? null, lastErrorCode: state.lastErrorCode } : null };
     });
     const saveSelection = (userId: string, accountId: string, raw: z.input<typeof calendarSelectionSchema>) => protectIntegration(async () => {
         const input = calendarSelectionSchema.safeParse(raw);
         if (!input.success)
             throw new IntegrationError("INVALID_REQUEST");
         const calendars = await listCalendars(userId, accountId);
-        const account = await integration.getConnectedAccount(userId, accountId);
+        const account = await integration.getConnectedAccount(userId, accountId, "calendar-read");
         for (const item of input.data.calendars) {
             const calendar = calendars.find(c => c.id === item.id);
             if (!calendar)
@@ -54,6 +55,8 @@ export function createGoogleCalendarService(options: {
             const current = await tx.connectedAccount.findFirst({ where: { id: accountId, userId, status: { in: ["ACTIVE", "ERROR"] } } });
             if (!current)
                 throw new IntegrationError("DISCONNECTED");
+            await integration.assertProviderAccess(userId, accountId, "calendar-read", "google", tx);
+            if (input.data.calendars.some(c => c.allowStudyWrites)) await integration.assertProviderAccess(userId, accountId, "calendar-write", "google", tx);
             await tx.calendarIntegrationPreference.deleteMany({ where: { userId, connectedAccountId: accountId, externalCalendarId: { notIn: input.data.calendars.map(c => c.id) } } });
             for (const item of input.data.calendars) {
                 const c = calendars.find(c => c.id === item.id)!;
@@ -65,6 +68,7 @@ export function createGoogleCalendarService(options: {
         return getSettings(userId, accountId);
     });
     const syncAccount = (userId: string, accountId: string, force = false, signal?: AbortSignal) => protectIntegration(async () => {
+        const started = performance.now();
         await assertRead(userId, accountId);
         const timestamp = now();
         const window = calendarSyncWindow(timestamp);
@@ -84,7 +88,12 @@ export function createGoogleCalendarService(options: {
             if (!force && previous?.status === "COMPLETED" && previous.lastSuccessfulSyncAt && timestamp.getTime() - previous.lastSuccessfulSyncAt.getTime() < CALENDAR_CONFIG.freshMs && selections.every(p => p.windowEnd && p.windowEnd >= window.end && p.windowStart && p.windowStart <= window.start))
                 return null;
             const id = previous?.id ?? randomUUID();
-            const cursors = previous?.cursorEncrypted ? cursorSchema.parse(JSON.parse(encryption().decrypt(previous.cursorEncrypted, credentialContext(userId, "google", id, "sync-cursor")))) : {};
+            let cursors: CalendarCursor = {};
+            // Checkpoints are disposable; retain the last good cache until the fresh snapshot commits.
+            if (previous?.cursorEncrypted) {
+                try { cursors = cursorSchema.parse(JSON.parse(encryption().decrypt(previous.cursorEncrypted, credentialContext(userId, "google", id, "sync-cursor")))); }
+                catch { cursors = {}; }
+            }
             await tx.integrationSyncState.upsert({ where: { connectedAccountId_integrationType: key }, create: { id, ...key, status: "SYNCING", lastSyncStartedAt: timestamp, leaseToken: lease, leaseUntil: new Date(timestamp.getTime() + CALENDAR_CONFIG.leaseMs) }, update: { status: "SYNCING", lastSyncStartedAt: timestamp, leaseToken: lease, leaseUntil: new Date(timestamp.getTime() + CALENDAR_CONFIG.leaseMs), lastErrorCode: null } });
             return { id, cursors, selections };
         });
@@ -103,7 +112,7 @@ export function createGoogleCalendarService(options: {
                 const prior = claim.cursors[selection.id];
                 const incremental = prior?.revision === selection.revision && prior.start === window.start.toISOString() && prior.end === window.end.toISOString();
                 let full = !incremental;
-                const read = (token?: string) => using(userId, accountId, "calendar-read", adapter => adapter.events({ connectedAccountId: accountId, calendarId: selection.externalCalendarId, timezone: selection.timezone, ...window, blockAllDay: selection.blockAllDay, syncToken: token }));
+                const read = (token?: string) => using(userId, accountId, "calendar-read", adapter => adapter.events({ connectedAccountId: accountId, calendarId: selection.externalCalendarId, timezone: selection.timezone, ...window, blockAllDay: selection.blockAllDay, syncToken: token }), signal);
                 let batch;
                 try {
                     batch = await read(incremental ? prior.token : undefined);
@@ -124,14 +133,15 @@ export function createGoogleCalendarService(options: {
                     throw new IntegrationError("CALENDAR_LIMIT");
                 const missingIds = batch.events.filter(e => e.status === "cancelled").map(e => e.externalId);
                 // Bounded link checks distinguish deletion from a moved, transparent or out-of-window event.
-                const links = await db().externalEventLink.findMany({ where: { userId, connectedAccountId: accountId, externalCalendarId: selection.externalCalendarId, status: { in: ["LINKED", "PENDING"] }, OR: [{ syncedStart: { lt: window.end }, syncedEnd: { gt: window.start } }, { status: "PENDING", createdAt: { gte: window.start } }] }, take: CALENDAR_CONFIG.maxEvents + 1 });
-                if (links.length > CALENDAR_CONFIG.maxEvents)
-                    throw new IntegrationError("CALENDAR_LIMIT");
+                const returnedIds = new Set(batch.events.map(event => event.externalId));
+                const links = full ? await db().externalEventLink.findMany({ where: { userId, connectedAccountId: accountId, externalCalendarId: selection.externalCalendarId, externalEventId: { notIn: [...returnedIds] }, status: { in: ["LINKED", "PENDING"] }, OR: [{ syncedStart: { lt: window.end }, syncedEnd: { gt: window.start } }, { status: "PENDING", createdAt: { gte: window.start } }] }, orderBy: { updatedAt: "asc" }, take: 25 }) : [];
                 for (const link of links)
-                    if (!batch.events.some(e => e.externalId === link.externalEventId) && full) {
-                        const event = await using(userId, accountId, "calendar-read", a => a.getEvent(selection.externalCalendarId, link.externalEventId));
+                    if (full) {
+                        if (signal?.aborted || now().getTime() - timestamp.getTime() > CALENDAR_CONFIG.leaseMs - 10000) throw new IntegrationError("PROVIDER_UNAVAILABLE");
+                        const event = await using(userId, accountId, "calendar-read", a => a.getEvent(selection.externalCalendarId, link.externalEventId), signal);
                         if (!event || event.status === "cancelled")
                             missingIds.push(link.externalEventId);
+                        else await db().externalEventLink.updateMany({ where: { id: link.id, userId, updatedAt: link.updatedAt }, data: { updatedAt: now() } });
                     }
                 results.push({ selection, events: [...merged.values()], missingIds });
                 cursors[selection.id] = { token: batch.syncToken, start: window.start.toISOString(), end: window.end.toISOString(), revision: selection.revision };
@@ -142,6 +152,7 @@ export function createGoogleCalendarService(options: {
                 const state = await tx.integrationSyncState.findFirst({ where: { id: claim.id, leaseToken: lease, leaseUntil: { gt: now() } } });
                 if (!active || !state)
                     throw new IntegrationError("CONNECTION_BUSY");
+                await integration.assertProviderAccess(userId, accountId, "calendar-read", "google", tx);
                 for (const result of results) {
                     const updated = await tx.calendarIntegrationPreference.updateMany({ where: { id: result.selection.id, userId, revision: result.selection.revision }, data: { busyEvents: result.events as unknown as Prisma.InputJsonValue, windowStart: window.start, windowEnd: window.end } });
                     if (updated.count !== 1)
@@ -151,9 +162,11 @@ export function createGoogleCalendarService(options: {
             });
             for (const result of results)
                 await db().externalEventLink.updateMany({ where: { userId, connectedAccountId: accountId, externalCalendarId: result.selection.externalCalendarId, externalEventId: { in: result.missingIds }, status: "LINKED", updatedAt: { lte: timestamp } }, data: { status: "MISSING" } });
+            recordIntegrationMetric("syncSuccesses", performance.now() - started);
             return { synced: true };
         }
         catch (error) {
+            recordIntegrationMetric("syncFailures", performance.now() - started);
             await db().integrationSyncState.updateMany({ where: { id: claim.id, leaseToken: lease }, data: { status: "FAILED", lastErrorCode: safeIntegrationError(error).code, lastSyncCompletedAt: now(), leaseToken: null, leaseUntil: null } });
             throw error;
         }

@@ -124,18 +124,18 @@ Future write features require their own deliberate method/API implementation.
 `getValidAccessToken(userId, connectedAccountId, capability?, provider?)` is a
 server-only entry point for trusted services and background jobs. It needs no
 browser cookies; the job executor validates the owning user before dispatch.
-Tokens refresh within 60 seconds of expiration. An account row lock spans the
-bounded refresh HTTP request (8-second provider timeout / 25-second transaction
-limit), preventing duplicate refreshes across processes. Rotated refresh tokens
-are stored; omitted ones retain the latest value. Reconnect locks and re-reads the
-account after any concurrent refresh, avoiding overwrite of a rotated token.
+Tokens refresh within 60 seconds of expiration. A short account transaction claims
+a durable 15-second refresh lease, then releases its lock before the bounded
+8-second HTTP request. Other processes wait at most 20 seconds and reuse the result.
+Publishing requires the same lease and credential version; a reconnect or disconnect
+fences a late result. Rotated refresh tokens are stored; omitted ones retain the latest value.
 
 `invalid_grant` clears credentials and marks Needs Reconnect, with no indefinite
 retry. Temporary failures mark Error with a one-minute retry cooldown. Refresh
 state is committed before a safe error is raised. Missing capabilities fail before
 feature HTTP calls. Scope loss during refresh is persisted and detected.
 
-Disconnect waits for an already-running bounded refresh, then atomically marks the
+Disconnect can commit while a refresh is awaiting the provider. It atomically marks the
 account revoked, clears both tokens and sync cursor, and invalidates pending OAuth
 sessions. This commit happens **before** remote revocation. All later token access
 is denied even if remote revocation fails. Already-issued external requests cannot
@@ -143,6 +143,17 @@ be undone; the client helper refuses to return their results after disconnect.
 A brief revocation-in-progress guard prevents immediate reconnect/revoke races.
 Repeated disconnect is harmless. Remote failure is recorded without retaining
 usable tokens for retry; users can verify/revoke access in their provider account.
+
+Provider 401 responses force one centralized refresh/retry; a second rejection stops
+future calls until reconnect. Explicit missing-scope responses deny only that capability
+until consent is renewed. Resource-level 403 responses do not invalidate unrelated
+permissions. Google 429/quota errors retain a bounded Retry-After (30–3,600 seconds);
+the capability cooldown is durable and applies to jobs and manual requests.
+Malformed ciphertext requires reconnect. Missing key-store configuration preserves
+encrypted credentials and cools down instead of destroying recoverable values.
+
+See [integration hardening verification](integration-hardening.md) for health states,
+failure coverage, client-boundary checks and production limitations.
 
 Integration events are typed, allowlisted metadata notifications, not a new event
 bus. The existing background error normalization handles reconnect/scope errors as

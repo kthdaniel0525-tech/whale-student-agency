@@ -38,7 +38,14 @@ Configurable constants in `server/calendar/config.ts` default to 3 past days and
 
 Initial reads use bounded timeMin/timeMax and expanded recurring occurrences. Later same-window reads use nextSyncToken, omitting incompatible time filters; pagination carries the identical sync token. A 410 response resets that calendar with a bounded full read. The rolling window gets a new bounded snapshot each UTC day, so moved/new recurring events cannot disappear at the horizon edge. Only in-window busy events survive caching. Cursor and cache commit atomically; lease and selection-revision checks reject stale workers. Refresh, scheduled jobs and planning freshness share this implementation.
 
-A system sweep enqueues at most 100 due accounts per cycle; recently attempted accounts are excluded so later accounts can advance. Jobs derive ownership from ConnectedAccount, debounce per account, retry twice and use the existing job executor. No OAuth cookies or frontend user IDs are used by workers. Disconnect deletes calendar preferences/cache, erases cursors/leases, and prevents queued work from calling Google.
+A system sweep enqueues at most 100 due accounts per cycle; recently attempted accounts are excluded so later accounts can advance. Jobs derive ownership from ConnectedAccount, debounce per account, retry twice and use the existing job executor. Pending/running jobs coalesce manual and scheduled requests; scheduled starts receive up to one minute of deterministic jitter. Publication failures are isolated per account. No OAuth cookies or frontend user IDs are used by workers. Disconnect preserves calendar selection, clears cache/cursors/leases, and prevents queued work from calling Google. Reconnect restores access to the same selection and authoritative event links.
+
+Corrupt or retired-key checkpoints fall back to a fresh bounded snapshot. Metadata reads
+never advance snapshot freshness. Missing linked events receive at most 25 individual
+verification reads per calendar per full sync, oldest checks first; unchecked links are
+preserved rather than falsely labeled deleted. Provider paging respects job cancellation.
+Task exclusion matches account, calendar and event together, including when two accounts
+use `primary` and the same external event ID.
 
 ## Explicit write safety
 

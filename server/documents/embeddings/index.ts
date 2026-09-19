@@ -5,11 +5,13 @@ import type { FeatureExtractionPipeline } from "@huggingface/transformers";
 import type { AIEmbeddingProvider } from "@/server/ai/types";
 import { RAG_EMBEDDING } from "@/server/ai/config";
 import { AIError } from "@/server/ai/errors";
+import { trackEmbeddingProvider } from "@/server/ai/usage/tracking";
+import type { AIUsageContext } from "@/server/ai/usage/types";
 import { documentConfig, DocumentError } from "../config";
 export const EMBEDDING_DIMENSIONS = RAG_EMBEDDING.dimensions;
 export interface EmbeddingProvider {
   readonly id: string;
-  generateEmbedding(text: string): Promise<number[]>;
+  generateEmbedding(text: string, usageContext?: AIUsageContext): Promise<number[]>;
 }
 export function validateEmbedding(value: unknown): number[] {
   const vector = z
@@ -58,7 +60,7 @@ async function model() {
   }
   return pipelinePromise;
 }
-export const localEmbeddingProvider: AIEmbeddingProvider = {
+export const localEmbeddingProvider: AIEmbeddingProvider = trackEmbeddingProvider({
   async generateEmbedding(request) {
     if (request.signal?.aborted) throw new AIError("CANCELLED");
     if (
@@ -88,15 +90,15 @@ export const localEmbeddingProvider: AIEmbeddingProvider = {
       const vector = validateEmbedding(Array.from(output.data));
       for (let i = 0; i < sum.length; i++) sum[i] += vector[i] * window.length;
     }
-    return { model: RAG_EMBEDDING.id, vector: validateEmbedding(sum) };
+    return { model: RAG_EMBEDDING.id, vector: validateEmbedding(sum), usage: { inputTokens: tokens.length, outputTokens: 0, totalTokens: tokens.length } };
   },
-};
+}, { provider: "local", embeddingModel: RAG_EMBEDDING.id });
 
 // Preserve the existing RAG API and persisted model ID; inference has one implementation.
 export const embeddingProvider: EmbeddingProvider = {
   id: RAG_EMBEDDING.id,
-  async generateEmbedding(text) {
-    return (await localEmbeddingProvider.generateEmbedding({ input: text }))
+  async generateEmbedding(text, usageContext) {
+    return (await localEmbeddingProvider.generateEmbedding({ input: text, usageContext }))
       .vector;
   },
 };

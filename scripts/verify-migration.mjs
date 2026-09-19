@@ -40,6 +40,7 @@ try {
       "OAuthConnectionSession",
       "IntegrationSyncState",
       "User",
+      "AIUsageRecord",
       "Profile",
       "Course",
       "Assignment",
@@ -87,8 +88,12 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 25)
+    if (migration.rows[0].count !== 27)
       throw new Error("Unexpected applied migration count.");
+    const integrationColumns = await verify.query(`SELECT column_name FROM information_schema.columns
+      WHERE table_schema='public' AND ((table_name='ConnectedAccount' AND column_name IN ('refreshLeaseToken','refreshLeaseUntil','deniedCapabilities'))
+      OR (table_name='IntegrationSyncState' AND column_name='retryAfter'))`);
+    if (integrationColumns.rows.length !== 4) throw new Error("Missing integration hardening fields.");
     const preferences = await verify.query(`SELECT column_name FROM information_schema.columns
       WHERE table_schema='public' AND table_name='ReminderPreference'
       AND column_name IN ('proactiveRecommendationsEnabled','quietHoursEnabled','notificationFrequency')`);
@@ -120,6 +125,10 @@ try {
     );
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
+    const usageIndexes = await verify.query(`SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename='AIUsageRecord'`);
+    if (usageIndexes.rows.length !== 7) throw new Error("Missing AI usage identity or query indexes.");
+    const usageFields = await verify.query(`SELECT column_name FROM information_schema.columns WHERE table_name='AIUsageRecord' AND column_name IN ('usageSource','pricingVersion','estimatedCostUsd','requestId')`);
+    if (usageFields.rows.length !== 4) throw new Error("Missing AI usage metadata or pricing snapshot.");
     console.log(
       `Fresh PostgreSQL migration verified: ${tables.rows.length} tables, ${migration.rows[0].count} migrations, academic source links, external file links, calendar selections/event links, scheduled study times, encrypted external connections, automation settings, notification delivery, reminder intelligence, background job runs, course workspace indexes, learning progress snapshots, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.`,
     );

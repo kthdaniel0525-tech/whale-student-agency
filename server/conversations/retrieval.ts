@@ -112,6 +112,7 @@ export async function retrieveOwnedConversationMessages(
     const provider = await embeddingProvider(options);
     if (provider) {
       const response = await provider.generateEmbedding({
+        usageContext: { userId, conversationId: input.conversationId, source: "conversation-query" },
         input: input.query,
         dimensions: 384,
       });

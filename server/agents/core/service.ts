@@ -1,4 +1,5 @@
 import "server-only";
+import { withAIUsageContext } from "../../ai/usage/context";
 import { auth } from "../../auth/config";
 import {
   AgentExecutor,
@@ -58,58 +59,60 @@ export class AgentService<Extension extends string = never> {
           new AgentExecutionError("UNAUTHENTICATED").message,
         );
       }
-      const parsed = inputSchema.safeParse(input);
-      if (!parsed.success) {
-        return failure(
-          "INVALID_REQUEST",
-          new AgentExecutionError("INVALID_REQUEST").message,
-        );
-      }
-      const { request, preferredAgentId, courseId, examId, assignmentId, projectIds, documentIds, conversation } =
-        parsed.data;
-      stage = "routing";
-      const routing = await this.#router.routeAgent({
-        request,
-        ...(preferredAgentId !== undefined ? { preferredAgentId } : {}),
-      });
-      stage = "execution";
-      // Executor/Context Builder derive the same verified user from the captured session.
-      const handler: AgentExecutionHandler<Extension> = this.#handlers?.[routing.agentId] ??
-        ((request, headers, executor) => executor.execute(request, headers));
-      const execution = await handler(
-        {
-          agentId: routing.agentId,
+      return await withAIUsageContext({ userId: session.user.id }, async () => {
+        const parsed = inputSchema.safeParse(input);
+        if (!parsed.success) {
+          return failure(
+            "INVALID_REQUEST",
+            new AgentExecutionError("INVALID_REQUEST").message,
+          );
+        }
+        const { request, preferredAgentId, courseId, examId, assignmentId, projectIds, documentIds, conversation } =
+          parsed.data;
+        stage = "routing";
+        const routing = await this.#router.routeAgent({
           request,
-          ...(courseId !== undefined ? { courseId } : {}),
-          ...(examId !== undefined ? { examId } : {}),
-          ...(assignmentId !== undefined ? { assignmentId } : {}),
-          ...(projectIds !== undefined ? { projectIds } : {}),
-          ...(documentIds !== undefined ? { documentIds } : {}),
-          ...(conversation !== undefined ? { conversation } : {}),
-        },
-        trustedHeaders,
-        this.#executor,
-        this.registry,
-      );
-      const agent = this.registry.get(execution.agentId);
-      return {
-        ok: true,
-        agent: { id: agent.id, name: agent.name },
-        routing: {
-          agentId: routing.agentId,
-          confidence: routing.confidence,
-          method: routing.method,
-        },
-        response: {
-          content: execution.content,
-          sources: execution.sources ?? [],
-          ...(execution.structuredData !== undefined ? { structuredData: execution.structuredData } : {}),
-        },
-        metadata: {
-          ...execution.metadata,
-          totalDurationMs: Math.round(performance.now() - started),
-        },
-      };
+          ...(preferredAgentId !== undefined ? { preferredAgentId } : {}),
+        });
+        stage = "execution";
+        // Executor/Context Builder derive the same verified user from the captured session.
+        const handler: AgentExecutionHandler<Extension> = this.#handlers?.[routing.agentId] ??
+          ((request, headers, executor) => executor.execute(request, headers));
+        const execution = await handler(
+          {
+            agentId: routing.agentId,
+            request,
+            ...(courseId !== undefined ? { courseId } : {}),
+            ...(examId !== undefined ? { examId } : {}),
+            ...(assignmentId !== undefined ? { assignmentId } : {}),
+            ...(projectIds !== undefined ? { projectIds } : {}),
+            ...(documentIds !== undefined ? { documentIds } : {}),
+            ...(conversation !== undefined ? { conversation } : {}),
+          },
+          trustedHeaders,
+          this.#executor,
+          this.registry,
+        );
+        const agent = this.registry.get(execution.agentId);
+        return {
+          ok: true,
+          agent: { id: agent.id, name: agent.name },
+          routing: {
+            agentId: routing.agentId,
+            confidence: routing.confidence,
+            method: routing.method,
+          },
+          response: {
+            content: execution.content,
+            sources: execution.sources ?? [],
+            ...(execution.structuredData !== undefined ? { structuredData: execution.structuredData } : {}),
+          },
+          metadata: {
+            ...execution.metadata,
+            totalDurationMs: Math.round(performance.now() - started),
+          },
+        };
+      });
     } catch (error) {
       return normalizeAgentFailure(error, stage);
     }

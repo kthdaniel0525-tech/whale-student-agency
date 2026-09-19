@@ -24,7 +24,7 @@ test("Drive is enabled only through separate incremental consent", async ({ page
         await page.route("https://accounts.google.com/**", route => route.fulfill({ contentType: "text/html", body: "<h1>Drive consent fixture</h1>" }));
         await page.goto("/student/settings#integrations");
         const panel = page.getByRole("region", { name: "Google Drive settings" });
-        await expect(panel).toContainText("Not enabled");
+        await expect(panel).toContainText("Needs permission");
         await panel.getByRole("button", { name: "Enable Drive" }).click();
         await expect(page.getByRole("heading", { name: "Drive consent fixture" })).toBeVisible();
         const url = new URL(page.url());

@@ -5,6 +5,7 @@ import type { ResponseCreateParamsNonStreaming } from "openai/resources/response
 import { z } from "zod";
 import { getAIConfig, type AIConfig } from "../config";
 import { AIError } from "../errors";
+import { trackAIProvider, type UsageTrackingOptions } from "../usage/tracking";
 import type {
   AIProvider,
   AITextRequest,
@@ -52,11 +53,29 @@ const responseSchema = z.object({
       input_tokens: z.number().int().nonnegative(),
       output_tokens: z.number().int().nonnegative(),
       total_tokens: z.number().int().nonnegative(),
+      input_tokens_details: z.object({ cached_tokens: z.number().int().nonnegative().optional() }).nullish(),
+      output_tokens_details: z.object({ reasoning_tokens: z.number().int().nonnegative().optional() }).nullish(),
     })
     .nullish(),
 });
 
+function responseUsage(value: unknown) {
+  const data = z.object({ model: z.string().optional(), usage: responseSchema.shape.usage }).safeParse(value);
+  if (!data.success || !data.data.usage) return undefined;
+  const usage = data.data.usage;
+  return { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, totalTokens: usage.total_tokens,
+    ...(usage.input_tokens_details?.cached_tokens !== undefined ? { cachedInputTokens: usage.input_tokens_details.cached_tokens } : {}),
+    ...(usage.output_tokens_details?.reasoning_tokens !== undefined ? { reasoningTokens: usage.output_tokens_details.reasoning_tokens } : {}),
+  };
+}
 function readResponse(value: unknown): AITextResponse {
+  try { return validateResponse(value); }
+  catch (error) {
+    const model = z.object({ model: z.string() }).safeParse(value);
+    throw new AIError(error instanceof AIError ? error.code : "INVALID_RESPONSE", responseUsage(value), model.success ? model.data.model : undefined);
+  }
+}
+function validateResponse(value: unknown): AITextResponse {
   const parsed = responseSchema.safeParse(value);
   if (!parsed.success) throw new AIError("INVALID_RESPONSE");
   const response = parsed.data;
@@ -84,11 +103,7 @@ function readResponse(value: unknown): AITextResponse {
     text,
     ...(response.usage
       ? {
-          usage: {
-            inputTokens: response.usage.input_tokens,
-            outputTokens: response.usage.output_tokens,
-            totalTokens: response.usage.total_tokens,
-          },
+          usage: responseUsage(value),
         }
       : {}),
   };
@@ -115,7 +130,21 @@ function providerError(error: unknown, signal?: AbortSignal): AIError {
   return new AIError("PROVIDER_FAILURE");
 }
 
-export class OpenAIProvider implements AIProvider {
+/** JSON Schema cannot express custom refinements. Send its underlying shape;
+ * the original Zod schema still validates every result below. Transform effects
+ * remain unsupported so the wire shape cannot silently differ from its input. */
+function wireSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
+  if (schema instanceof z.ZodString) return new z.ZodString({ ...schema._def, checks: schema._def.checks.filter(check => !["trim", "toLowerCase", "toUpperCase"].includes(check.kind)) });
+  if (schema instanceof z.ZodEffects && schema._def.effect.type === "refinement") return wireSchema(schema.innerType());
+  if (schema instanceof z.ZodObject) return schema.extend(Object.fromEntries(Object.entries(schema.shape as Record<string, z.ZodTypeAny>).map(([key, value]) => [key, wireSchema(value)])));
+  if (schema instanceof z.ZodArray) return new z.ZodArray({ ...schema._def, type: wireSchema(schema.element) });
+  if (schema instanceof z.ZodNullable) return new z.ZodNullable({ ...schema._def, innerType: wireSchema(schema.unwrap()) });
+  if (schema instanceof z.ZodOptional) return new z.ZodOptional({ ...schema._def, innerType: wireSchema(schema.unwrap()) });
+  if (schema instanceof z.ZodUnion) return new z.ZodUnion({ ...schema._def, options: schema.options.map(wireSchema) });
+  return schema;
+}
+
+class OpenAITransport implements AIProvider {
   readonly #client: OpenAI;
   readonly #config: AIConfig;
   constructor(
@@ -173,7 +202,7 @@ export class OpenAIProvider implements AIProvider {
       try {
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(request.schemaName))
           throw new AIError("INVALID_REQUEST");
-        format = zodTextFormat(request.schema, request.schemaName);
+        format = zodTextFormat(wireSchema(request.schema), request.schemaName);
         if (format.schema.type !== "object")
           throw new AIError("INVALID_REQUEST");
       } catch {
@@ -189,7 +218,7 @@ export class OpenAIProvider implements AIProvider {
         const data = await request.schema.parseAsync(JSON.parse(response.text));
         return { ...response, data };
       } catch {
-        throw new AIError("INVALID_RESPONSE");
+        throw new AIError("INVALID_RESPONSE", response.usage, response.model);
       }
     } catch (error) {
       throw providerError(error, request.signal);
@@ -214,17 +243,17 @@ export class OpenAIProvider implements AIProvider {
           yield { type: "text-delta", text: event.delta };
         } else if (event.type === "response.completed") {
           const response = readResponse(event.response);
-          if (response.text !== text) throw new AIError("INVALID_RESPONSE");
+          if (response.text !== text) throw new AIError("INVALID_RESPONSE", response.usage, response.model);
           yield { type: "complete", response };
           return;
         } else if (event.type === "error" || event.type === "response.failed") {
-          throw new AIError("PROVIDER_FAILURE");
+          throw new AIError("PROVIDER_FAILURE", event.type === "response.failed" ? responseUsage(event.response) : undefined, event.type === "response.failed" ? event.response?.model : undefined);
         } else if (
           event.type === "response.incomplete" ||
           event.type === "response.refusal.delta" ||
           event.type === "response.refusal.done"
         ) {
-          throw new AIError("INVALID_RESPONSE");
+          throw new AIError("INVALID_RESPONSE", event.type === "response.incomplete" ? responseUsage(event.response) : undefined, event.type === "response.incomplete" ? event.response?.model : undefined);
         }
       }
       throw new AIError(
@@ -240,6 +269,8 @@ export class OpenAIProvider implements AIProvider {
   async generateEmbedding(
     request: AIEmbeddingRequest,
   ): Promise<AIEmbeddingResponse> {
+    let reportedUsage: AIEmbeddingResponse["usage"];
+    let reportedModel: string | undefined;
     try {
       if (request.signal?.aborted) throw new AIError("CANCELLED");
       const parsed = embeddingInput.safeParse(request);
@@ -255,6 +286,9 @@ export class OpenAIProvider implements AIProvider {
         },
         { signal: request.signal },
       );
+      reportedModel = response.model;
+      const tokens = z.object({ prompt_tokens: z.number().int().nonnegative(), total_tokens: z.number().int().nonnegative() }).safeParse(response.usage);
+      if (tokens.success) reportedUsage = { inputTokens: tokens.data.prompt_tokens, outputTokens: 0, totalTokens: tokens.data.total_tokens };
       const valid = z
         .object({
           model: z.string().min(1),
@@ -273,9 +307,23 @@ export class OpenAIProvider implements AIProvider {
       const norm = Math.hypot(...vector);
       if (!Number.isFinite(norm) || norm < 1e-8)
         throw new AIError("INVALID_RESPONSE");
-      return { model: valid.data.model, vector };
+      return { model: valid.data.model, vector, ...(reportedUsage ? { usage: reportedUsage } : {}) };
     } catch (error) {
-      throw providerError(error, request.signal);
+      const failure = providerError(error, request.signal);
+      throw new AIError(failure.code, reportedUsage, reportedModel);
     }
   }
+}
+
+/** All construction paths, including direct SDK-boundary tests, use accounting. */
+export class OpenAIProvider implements AIProvider {
+  readonly #provider: AIProvider;
+  constructor(config: AIConfig = getAIConfig(), fetcher?: typeof globalThis.fetch,
+    tracking: Pick<UsageTrackingOptions, "write" | "clock" | "pricing"> = {}) {
+    this.#provider = trackAIProvider(new OpenAITransport(config, fetcher), { ...tracking, provider: "openai", chatModel: config.chatModel, embeddingModel: config.embeddingModel });
+  }
+  generateText(request: AITextRequest) { return this.#provider.generateText(request); }
+  generateStructuredOutput<T>(request: AIStructuredRequest<T>) { return this.#provider.generateStructuredOutput(request); }
+  streamText(request: AIStreamRequest) { return this.#provider.streamText(request); }
+  generateEmbedding(request: AIEmbeddingRequest) { return this.#provider.generateEmbedding(request); }
 }

@@ -50,3 +50,7 @@ Google Calendar setup and behavior: [Google Calendar integration](docs/google-ca
 Google Drive course imports: [setup, permissions, refresh safety and tests](docs/google-drive.md).
 
 LMS / Course Import Foundation: [provider contract, mapping policy, sync and verification](docs/academic-integrations.md).
+
+Integration hardening: [failure handling, security, health, verification and operational limits](docs/integration-hardening.md).
+
+AI usage: [token tracking, estimated pricing, attribution, aggregation and privacy](docs/ai-usage.md).

@@ -1,4 +1,5 @@
 import "server-only";
+import type { AIUsageContext } from "../ai/usage/types";
 import { z } from "zod";
 import type { AIProvider } from "../ai/types";
 import { CONVERSATION_CONFIG } from "./config";
@@ -202,6 +203,7 @@ function fallbackSummary(
 }
 
 export async function generateIncrementalSummary(input: {
+  usageContext?: AIUsageContext;
   provider?: AIProvider;
   previous?: ConversationSummaryData;
   messages: readonly ConversationMessageRecord[];
@@ -219,6 +221,7 @@ export async function generateIncrementalSummary(input: {
   ]);
   try {
     const response = await input.provider.generateStructuredOutput({
+      usageContext: { ...input.usageContext, operationType: "summarization" },
       schemaName: "conversation_summary",
       schema: summaryDataSchema,
       maxOutputTokens: 1800,

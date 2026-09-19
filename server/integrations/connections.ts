@@ -4,7 +4,7 @@ import { db } from "../db/client";
 import { IntegrationError } from "./errors";
 /** Provider-neutral, secret-free account metadata for non-OAuth-only integrations. */
 export async function getOwnedConnection(userId: string, id: string, tx: Prisma.TransactionClient = db()) {
-    const account = await tx.connectedAccount.findFirst({ where: { id, userId }, select: { id: true, userId: true, provider: true, displayName: true, email: true, status: true, scopes: true, connectionConfig: true, credentialVersion: true } });
+    const account = await tx.connectedAccount.findFirst({ where: { id, userId }, select: { id: true, userId: true, provider: true, displayName: true, email: true, status: true, scopes: true, deniedCapabilities: true, connectionConfig: true, credentialVersion: true } });
     if (!account)
         throw new IntegrationError("NOT_FOUND");
     return account;

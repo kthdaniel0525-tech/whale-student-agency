@@ -1,4 +1,5 @@
 import "server-only";
+import { withAIUsageContext } from "../ai/usage/context";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "../db/client";
@@ -69,6 +70,11 @@ export class WorkflowEngine {
 
   private async advance(definition: WorkflowDefinition, id: string, headers: Headers,
     prepare?: (context: Readonly<WorkflowContext>) => Promise<NonNullable<StepOutput["patch"]>>) {
+    return withAIUsageContext({ workflowId: definition.id, workflowRunId: id }, () => this.advanceScoped(definition, id, headers, prepare));
+  }
+
+  private async advanceScoped(definition: WorkflowDefinition, id: string, headers: Headers,
+    prepare?: (context: Readonly<WorkflowContext>) => Promise<NonNullable<StepOutput["patch"]>>) {
     const identity = await workflowIdentity(headers);
     const userId = identity.userId;
     const run = await db().workflowRun.findFirstOrThrow({ where: { id, userId }, include: { steps: true } });
@@ -114,7 +120,7 @@ export class WorkflowEngine {
           try {
             let output: StepOutput;
             try {
-              output = await this.execute(step, mapped, structuredClone(context), identity.headers);
+              output = await withAIUsageContext({ userId, workflowId: definition.id, workflowRunId: run.id, agentId: step.agentId }, () => this.execute(step, mapped, structuredClone(context), identity.headers));
             } finally {
               // A domain operation can fail after committing a write. Optional
               // continuation must also discard potentially stale aggregates.

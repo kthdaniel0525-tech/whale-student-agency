@@ -1,4 +1,5 @@
 "use client";
+import { INTEGRATION_HEALTH_LABELS } from "@/lib/student/integrations/health";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,7 @@ export function AcademicCourseSync({ courseId, onSynced }: {
     if (!state)
         return error ? <p className="text-sm text-muted-foreground">{error}</p> : null;
     const result = state.result;
-    return <section className="mb-4 rounded-lg border p-3 text-sm" aria-label="Course integration status"><p>Synced with {state.providerName} · {state.status}</p><p>Last sync: {state.lastSyncedAt ? new Date(state.lastSyncedAt).toLocaleString() : "Not yet"}</p>{result && <p>Created: {result.created.assignments} assignments, {result.created.assessments} exams, {result.created.files} files · Updated: {result.updated.assignments} assignments, {result.updated.assessments} exams, {result.updated.files} files · Failed: {result.failed}{result.created.skipped ? ` · ${result.created.skipped} items skipped (unsupported or no scheduled date; existing copies kept)` : ""}{result.missing ? ` · ${result.missing} sources missing; imported data preserved` : ""}</p>}
+    return <section className="mb-4 rounded-lg border p-3 text-sm" aria-label="Course integration status"><p>Synced with {state.providerName} · {state.health ? INTEGRATION_HEALTH_LABELS[state.health.state] : state.status}</p><p>Last sync: {state.lastSyncedAt ? new Date(state.lastSyncedAt).toLocaleString() : "Not yet"}</p>{result && <p>Created: {result.created.assignments} assignments, {result.created.assessments} exams, {result.created.files} files · Updated: {result.updated.assignments} assignments, {result.updated.assessments} exams, {result.updated.files} files · Failed: {result.failed}{result.created.skipped ? ` · ${result.created.skipped} items skipped (unsupported or no scheduled date; existing copies kept)` : ""}{result.missing ? ` · ${result.missing} sources missing; imported data preserved` : ""}</p>}
     <div className="mt-2 flex gap-3"><Button size="sm" variant="outline" disabled={!state.active || busy || state.pending || state.status === "syncing"} onClick={async () => { setBusy(true); setError(""); try {
         setState(await request<AcademicCourseStatus>(`/api/student/courses/${courseId}/integration/sync`, "POST"));
     }

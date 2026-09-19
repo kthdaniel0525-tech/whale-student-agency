@@ -1,4 +1,5 @@
 "use client";
+import { INTEGRATION_HEALTH_LABELS } from "@/lib/student/integrations/health";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -66,9 +67,9 @@ export function AcademicIntegrationSettings() {
     } }
     return <section id="academic-integrations" className="mt-6 rounded-xl border p-4" aria-label="Course imports"><h3 className="font-semibold">LMS / Course imports</h3>
     {!settings.providers.length && !settings.accounts.length && <p className="mt-2 text-sm text-muted-foreground">Institution connections are not available yet. You can continue adding courses and uploading materials normally.</p>}
-    {settings.accounts.map(a => <div key={a.id} className="mt-3 flex flex-wrap items-center gap-3"><span>{a.name} · {a.connected ? "Connected" : "Disconnected"}</span><Button size="sm" variant="outline" disabled={!a.connected || busy} onClick={() => void load(a.id)}>Browse courses</Button><Button size="sm" variant="ghost" disabled={!a.connected || busy} onClick={async () => { setBusy(true); try {
+    {settings.accounts.map(a => <div key={a.id} className="mt-3 flex flex-wrap items-center gap-3"><span>{a.name} · {a.health ? INTEGRATION_HEALTH_LABELS[a.health.state] : a.connected ? "Connected" : "Disconnected"}</span><Button size="sm" variant="outline" disabled={!a.connected || busy} onClick={() => void load(a.id)}>Browse courses</Button><Button size="sm" variant="ghost" disabled={!a.connected || busy} onClick={async () => { setBusy(true); try {
         await request(`/api/student/academic-integrations/accounts/${a.id}`, "DELETE");
-        setSettings(s => ({ ...s, accounts: s.accounts.map(row => row.id === a.id ? { ...row, connected: false } : row) }));
+        setSettings(s => ({ ...s, accounts: s.accounts.map(row => row.id === a.id ? { ...row, connected: false, health: undefined } : row) }));
         setPreview(null);
         setCourses([]);
     }

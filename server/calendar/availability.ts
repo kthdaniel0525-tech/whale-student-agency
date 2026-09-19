@@ -34,7 +34,7 @@ export function createAvailabilityService(calendar: ReturnType<typeof createGoog
             return { status: "not-connected", timezone, days: [], checkedAt: now.toISOString(), assumptions: [] };
         const accounts = [...new Map(selected.map(p => [p.connectedAccountId, p.connectedAccount])).entries()];
         let failures = 0;
-        const events: ExternalCalendarEvent[] = [];
+        const events: (ExternalCalendarEvent & { connectedAccountId: string })[] = [];
         for (const [id, account] of accounts) {
             try {
                 const source = sources.find(s => s.provider === account.provider);
@@ -44,7 +44,7 @@ export function createAvailabilityService(calendar: ReturnType<typeof createGoog
                 const [state, rows] = await Promise.all([db().integrationSyncState.findUnique({ where: { connectedAccountId_integrationType: { connectedAccountId: id, integrationType: "calendar-read" } } }), db().calendarIntegrationPreference.findMany({ where: { userId: input.userId, connectedAccountId: id, enabledForAvailability: true, connectedAccount: { status: { in: ["ACTIVE", "ERROR"] }, userId: input.userId } } })]);
                 if (!state?.lastSuccessfulSyncAt || state.status !== "COMPLETED" || now.getTime() - state.lastSuccessfulSyncAt.getTime() > CALENDAR_CONFIG.freshMs || !rows.length || rows.some(r => !r.windowStart || !r.windowEnd || r.windowStart > input.start || r.windowEnd < input.end))
                     throw new Error();
-                events.push(...rows.flatMap(cachedEvents));
+                events.push(...rows.flatMap(cachedEvents).map(event => ({ ...event, connectedAccountId: id })));
             }
             catch {
                 failures++;
@@ -52,7 +52,7 @@ export function createAvailabilityService(calendar: ReturnType<typeof createGoog
         }
         const localTasks = await db().studyTask.findMany({ where: { userId: input.userId, id: input.excludeTaskId ? { not: input.excludeTaskId } : undefined, status: { in: ["PLANNED", "IN_PROGRESS", "COMPLETED"] }, ...(input.excludePlanId ? { OR: [{ studyPlanId: { not: input.excludePlanId } }, { status: "COMPLETED" as const }] } : {}), scheduledStart: { lt: input.end }, scheduledEnd: { gt: input.start } }, select: { scheduledStart: true, scheduledEnd: true } });
         const excluded = input.excludeTaskId ? await db().externalEventLink.findMany({ where: { userId: input.userId, studyTaskId: input.excludeTaskId, status: { in: ["LINKED", "PENDING"] } }, select: { connectedAccountId: true, externalCalendarId: true, externalEventId: true } }) : [];
-        const busy = events.filter(e => e.blocksTime && e.start && e.end && !excluded.some(l => l.externalCalendarId === e.calendarId && l.externalEventId === e.externalId)).map(e => ({ start: e.start!, end: e.end! }));
+        const busy = events.filter(e => e.blocksTime && e.start && e.end && !excluded.some(l => l.connectedAccountId === e.connectedAccountId && l.externalCalendarId === e.calendarId && l.externalEventId === e.externalId)).map(e => ({ start: e.start!, end: e.end! }));
         busy.push(...localTasks.filter(t => t.scheduledStart && t.scheduledEnd).map(t => ({ start: t.scheduledStart!.toISOString(), end: t.scheduledEnd!.toISOString() })));
         if (failures)
             assumptions.push("Calendar availability may be unavailable for one or more accounts. Review your calendar before committing to these times.");

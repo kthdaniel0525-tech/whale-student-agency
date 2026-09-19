@@ -50,6 +50,7 @@ export type CourseSyncResult = {
     }[];
 };
 export type AcademicCourseStatus = {
+    health?: import("../integrations/health").IntegrationHealth;
     id: string;
     courseId: string;
     providerName: string;
@@ -66,6 +67,7 @@ export type AcademicSettings = {
         name: string;
     }[];
     accounts: {
+        health?: import("../integrations/health").IntegrationHealth;
         id: string;
         name: string;
         provider: string;

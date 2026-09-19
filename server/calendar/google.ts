@@ -10,13 +10,18 @@ const opaque = z.string().min(1).max(1024);
 const calendarSchema = z.object({ id: opaque, summary: z.string().max(1000).optional(), timeZone: z.string().refine(isValidTimezone), accessRole: z.string(), deleted: z.boolean().optional() });
 const eventTime = z.object({ date: z.string().optional(), dateTime: z.string().optional(), timeZone: z.string().optional() });
 const eventSchema = z.object({ id: opaque, status: z.enum(["confirmed", "tentative", "cancelled"]).default("confirmed"), start: eventTime.optional(), end: eventTime.optional(), transparency: z.enum(["opaque", "transparent"]).optional(), eventType: z.string().optional(), attendees: z.array(z.object({ self: z.boolean().optional(), responseStatus: z.string().optional() })).optional(), extendedProperties: z.object({ private: z.record(z.string()).optional() }).optional() });
-const pageSchema = z.object({ items: z.array(z.unknown()).default([]), nextPageToken: opaque.optional(), nextSyncToken: z.string().min(1).max(4096).optional(), timeZone: z.string().optional() });
+const pageSchema = z.object({ items: z.array(z.unknown()).max(CALENDAR_CONFIG.pageSize).default([]), nextPageToken: opaque.optional(), nextSyncToken: z.string().min(1).max(4096).optional(), timeZone: z.string().optional() });
 function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, value: unknown): T { const result = schema.safeParse(value); if (!result.success)
     throw new IntegrationError("INVALID_RESPONSE"); return result.data; }
 const segment = (value: string) => encodeURIComponent(opaque.parse(value));
 export const calendarEventPath = (calendarId: string, eventId?: string) => `calendars/${segment(calendarId)}/events${eventId ? `/${segment(eventId)}` : ""}`;
 export class GoogleCalendarAdapter {
-    constructor(private client: IntegrationClient) { }
+    constructor(private client: IntegrationClient, signal?: AbortSignal) {
+        this.client = { ...client, read(input) {
+            if (signal?.aborted) throw new IntegrationError("PROVIDER_UNAVAILABLE");
+            return client.read({ ...input, signal });
+        } };
+    }
     async listCalendars() {
         const result: {
             id: string;

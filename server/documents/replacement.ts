@@ -1,4 +1,5 @@
 import "server-only";
+import { withAIUsageContext } from "../ai/usage/context";
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "../db/client";
@@ -23,7 +24,7 @@ export async function replaceDocumentSource(input: {
     provider?: EmbeddingProvider;
 }) {
     const check = hooks.check ?? (() => { }), fileType = validateFile(input.fileName, input.bytes);
-    const prepared = await prepareDocument(input.bytes, fileType, hooks.provider ?? embeddingProvider, check);
+    const prepared = await withAIUsageContext({ userId: input.userId, source: "rag-document" }, () => prepareDocument(input.bytes, fileType, hooks.provider ?? embeddingProvider, check));
     check();
     const key = randomUUID();
     let committed = false;

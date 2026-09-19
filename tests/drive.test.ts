@@ -20,6 +20,8 @@ import { getDocument, deleteDocument } from "@/server/documents/service";
 import { fullDocumentText, retrieveAcademicContext } from "@/server/documents/retrieval";
 import { buildUserContext } from "@/server/context/builder";
 import { getTutorAgentDefinition } from "@/server/agents/tutor/definition";
+import { createStudentAgentRegistry } from "@/server/agents/student-service";
+import { AgentExecutor } from "@/server/agents/executor/executor";
 import { getNotesAgentDefinition } from "@/server/agents/notes/definition";
 import { getQuizAgentDefinition } from "@/server/agents/quiz/definition";
 import { WorkflowService } from "@/server/workflows";
@@ -148,6 +150,91 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await cleanup(); await db().jobRun.deleteMany({ where: { resourceId: { in: jobIds } } }); await db().user.deleteMany({ where: { id: { in: [owner.id, other.id] } } }); await db().$disconnect(); });
 describe.sequential("Drive selected imports through existing owned Document/RAG pipeline", () => {
+    it("pages through 300 Drive files without dropping or eagerly downloading entries", async () => {
+        const sample = files.get("pdf")!; const many = Array.from({ length: 300 }, (_, i) => ({ ...sample, id: `large-${i}` }));
+        const original = http.getMockImplementation()!;
+        http.mockImplementation(async (raw, init) => {
+            const url = new URL(String(raw));
+            if (url.pathname.endsWith("/files")) {
+                const offset = Number(url.searchParams.get("pageToken") ?? 0);
+                return Response.json({ files: many.slice(offset, offset + 30), ...(offset + 30 < many.length ? { nextPageToken: String(offset + 30) } : {}) });
+            }
+            return original(raw, init);
+        });
+        const found: string[] = []; let pageToken: string | undefined;
+        do { const page = await drive.list(owner.id, accountId, { pageToken }); found.push(...page.files.map(file => file.externalId)); pageToken = page.nextPageToken ?? undefined; } while (pageToken);
+        expect(new Set(found).size).toBe(300); expect(http).toHaveBeenCalledTimes(10); expect(downloads()).toHaveLength(0);
+    });
+    it("rejects a looping Drive continuation token", async () => {
+        http.mockResolvedValueOnce(Response.json({ files: [], nextPageToken: "repeat" }));
+        await expect(drive.list(owner.id, accountId, { pageToken: "repeat" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    });
+    it("keeps imported copy listings at a constant query count", async () => {
+        for (let i = 0; i < 30; i++) {
+            const doc = await db().document.create({ data: { userId: owner.id, courseId, title: "Fixture", originalFileName: "fixture.txt", fileType: "TXT", fileSize: 10, storageKey: `${owner.id}/${randomUUID()}.txt`, processingStatus: "READY" } });
+            await db().externalFileLink.create({ data: { userId: owner.id, connectedAccountId: accountId, provider: "google", courseId, documentId: doc.id, externalFileId: `file-${i}`, name: "Ready file", externalMimeType: "text/plain", syncStatus: "IDLE" } });
+        }
+        const lookup = vi.spyOn(db().document, "findFirst"); const rows = await listDriveImports(owner.id, accountId);
+        expect(rows).toHaveLength(30); expect(lookup).not.toHaveBeenCalled();
+    });
+    it("recovers abandoned pending requests instead of leaving imports stuck", async () => {
+        const first = await requested();
+        await db().externalFileLink.update({ where: { id: first.id }, data: { updatedAt: new Date(Date.now() - 16 * 60000) } });
+        const second = await requested(); expect(second.id).toBe(first.id); expect(queued).toHaveLength(2);
+        expect((await db().externalFileLink.findUniqueOrThrow({ where: { id: first.id } })).requestVersion).toBe(2);
+    });
+    it("finishes a committed download after worker restart without another provider download", async () => {
+        await requested(); const result = await importDriveFile({ userId: owner.id, ...resource() });
+        expect((await getDocument(owner.id, result.documentId!)).processingStatus).toBe("UPLOADED");
+        const before = downloads().length;
+        await importGoogleDriveFileJob.handler({ payload: { version: 1, ...resource() }, signal: new AbortController().signal, attempt: 2, jobRunId: "restart" });
+        expect((await getDocument(owner.id, result.documentId!)).processingStatus).toBe("READY"); expect(downloads()).toHaveLength(before);
+    });
+    it("records failed local processing without redownloading on retry", async () => {
+        await requested(); const embedding = vi.spyOn(embeddingProvider, "generateEmbedding").mockRejectedValue(new Error("offline local embedding"));
+        const run = () => importGoogleDriveFileJob.handler({ payload: { version: 1, ...resource() }, signal: new AbortController().signal, attempt: 1, jobRunId: "failed-process" });
+        await expect(run()).rejects.toMatchObject({ code: "PROCESSING_FAILED" }); const before = downloads().length;
+        embedding.mockRestore(); await expect(run()).rejects.toMatchObject({ code: "PROCESSING_FAILED" }); expect(downloads()).toHaveLength(before);
+        expect((await listDriveImports(owner.id, accountId))[0].status).toBe("Failed");
+    });
+    it("stops a cancelled download before publishing a Document", async () => {
+        await requested(); const abort = new AbortController(); downloadHook = async () => { abort.abort(); };
+        await expect(importDriveFile({ userId: owner.id, ...resource() }, { signal: abort.signal })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+        expect(await db().document.count({ where: { userId: owner.id } })).toBe(0);
+        expect((await listDriveImports(owner.id, accountId))[0].status).toBe("Failed");
+    });
+    it("retains account identity in same-file imports from two Google accounts", async () => {
+        const first = await imported(); const second = await account();
+        const input = { ...resource(), connectedAccountId: second.id };
+        await requestDriveImport(owner.id, input, publish); const copy = await importDriveFile({ userId: owner.id, ...input });
+        expect(copy.documentId).not.toBe(first);
+        await disconnectConnectedAccount(owner.id, second.id);
+        expect((await getDriveSettings(owner.id, accountId)).enabled).toBe(true);
+        expect((await getDocument(owner.id, first)).processingStatus).toBe("READY");
+    });
+    it("keeps the local Tutor context usable through rate limiting and refreshes it after recovery", async () => {
+        const documentId = await imported();
+        const prompts: string[] = [];
+        const provider: AIProvider = {
+            async generateText(input) { prompts.push(JSON.stringify(input.messages)); return { id: "tutor", model: "fixture", text: "Start with the base case and prove the successor step." }; },
+            generateStructuredOutput() { throw Error("Unexpected structured request"); }, streamText() { throw Error("Unexpected stream"); }, generateEmbedding() { throw Error("Use existing local RAG"); },
+        };
+        const executor = new AgentExecutor(createStudentAgentRegistry(), { getProvider: () => provider, conversationEmbeddingProvider: null });
+        const tutor = () => executor.execute({ agentId: "tutor", request: "Explain mathematical induction", courseId, documentIds: [documentId] }, owner.headers);
+        const context = () => buildUserContext({ request: "Explain mathematical induction", courseId, documentIds: [documentId], options: getTutorAgentDefinition().contextRequirements }, owner.headers);
+        await tutor(); expect(prompts.at(-1)).toContain(documentId); expect(prompts.at(-1)).not.toContain("anchor n=7");
+        expect(JSON.stringify((await context()).documents)).toContain(documentId);
+        failure = 429; await expect(drive.list(owner.id, accountId)).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED" });
+        expect((await getDriveSettings(owner.id, accountId)).needsReconnect).toBe(false);
+        expect(JSON.stringify((await context()).documents)).toContain(documentId);
+        failure = 0; await db().integrationSyncState.updateMany({ where: { connectedAccountId: accountId }, data: { retryAfter: new Date(0) } });
+        change("pdf", "Mathematical induction refreshed theorem: establish the anchor n=7 and then the successor step.");
+        await requestDriveRefresh(owner.id, documentId, publish); await importDriveFile({ userId: owner.id, ...resource() });
+        expect(JSON.stringify((await context()).documents)).toContain("anchor n=7");
+        await tutor(); expect(prompts.at(-1)).toContain("anchor n=7");
+        await disconnectConnectedAccount(owner.id, accountId); expect(JSON.stringify((await context()).documents)).toContain("anchor n=7");
+        await tutor(); expect(prompts.at(-1)).toContain("anchor n=7");
+    });
     it("reuses drive-read and requests it only by incremental consent", async () => {
         const calendar = await account(owner.id, [...GOOGLE_SCOPES["account-profile"], ...GOOGLE_SCOPES["calendar-read"]]);
         await expect(drive.list(owner.id, calendar.id)).rejects.toMatchObject({ code: "AUTHORIZATION_REQUIRED" });
@@ -517,7 +604,7 @@ describe.sequential("Drive selected imports through existing owned Document/RAG 
     });
     it("retries Google's 403 rate limits without treating them as revoked permissions", async () => {
         const provider = new GoogleIntegrationProvider(async () => Response.json({ error: { errors: [{ reason: "userRateLimitExceeded" }] } }, { status: 403 }));
-        await expect(provider.read({ capability: "drive-read", path: "files", accessToken: "test" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
-        await expect(provider.download({ capability: "drive-read", path: "files/pdf", query: { alt: "media" }, maxBytes: MAX_FILE_BYTES, accessToken: "test" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+        await expect(provider.read({ capability: "drive-read", path: "files", accessToken: "test" })).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED" });
+        await expect(provider.download({ capability: "drive-read", path: "files/pdf", query: { alt: "media" }, maxBytes: MAX_FILE_BYTES, accessToken: "test" })).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED" });
     });
 });

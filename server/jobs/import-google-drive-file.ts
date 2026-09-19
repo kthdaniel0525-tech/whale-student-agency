@@ -10,6 +10,7 @@ import { processNextDocument } from "../documents/processor";
 import { getBackgroundJobPublisher } from "./client";
 import { getBackgroundJobConfig } from "./config";
 import type { BackgroundJob } from "./types";
+import { BackgroundJobError } from "./errors";
 const payloadSchema = driveResourceSchema.extend({ version: z.literal(1), trackingId: z.string().max(100).optional() }).strict();
 export const importGoogleDriveFileJob: BackgroundJob<DriveResource & {
     version: 1;
@@ -23,8 +24,13 @@ export const importGoogleDriveFileJob: BackgroundJob<DriveResource & {
         if (!account)
             return { skipped: true };
         const result = await importDriveFile({ ...payload, userId: account.userId }, { signal });
-        if (result.documentId && !signal.aborted)
-            await processNextDocument(undefined, result.documentId, 120000);
+        // Resume local processing after a worker crash without re-downloading a committed copy.
+        const local = result.documentId ?? (await db().externalFileLink.findFirst({ where: { connectedAccountId: payload.connectedAccountId, externalFileId: payload.externalFileId, courseId: payload.courseId, userId: account.userId, syncStatus: "IDLE", document: { userId: account.userId } }, select: { documentId: true } }))?.documentId;
+        if (local && !signal.aborted) {
+            await processNextDocument(undefined, local, 120000);
+            const document = await db().document.findFirst({ where: { id: local, userId: account.userId }, select: { processingStatus: true } });
+            if (document?.processingStatus === "FAILED") throw new BackgroundJobError("PROCESSING_FAILED");
+        }
         return result;
     },
 };

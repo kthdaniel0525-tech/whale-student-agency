@@ -170,11 +170,58 @@ model User {
   connectedAccounts    ConnectedAccount[]
   oauthConnectionSessions OAuthConnectionSession[]
   externalFileLinks ExternalFileLink[]
+  aiUsageRecords AIUsageRecord[]
 
   externalCourseLinks ExternalCourseLink[]
   externalAssignmentLinks ExternalAssignmentLink[]
   externalExamLinks ExternalExamLink[]
 
+}
+
+// Immutable provider attempts. Optional attribution IDs survive resource deletion;
+// ownership is checked by the server writer, and account deletion removes usage.
+model AIUsageRecord {
+  id String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider String
+  model String
+  operationType String
+  agentId String?
+  workflowId String?
+  workflowRunId String?
+  conversationId String?
+  requestId String
+  inputTokens Int?
+  outputTokens Int?
+  totalTokens Int?
+  cachedInputTokens Int?
+  reasoningTokens Int?
+  usageSource String
+  estimatedCostUsd Decimal? @db.Decimal(20, 10)
+  pricingVersion String?
+  latencyMs Int
+  success Boolean
+  errorCode String?
+  source String?
+  batchSize Int?
+  estimatedContextTokens Int?
+  ragChunkCount Int?
+  retrievedTokenEstimate Int?
+  memoriesUsed Int?
+  personalizationFieldsUsed Int?
+  conversationSummaryUsed Boolean?
+  recentMessageCount Int?
+  historicalMessageCount Int?
+  estimatedConversationTokens Int?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, agentId, createdAt])
+  @@index([userId, workflowId, createdAt])
+  @@index([userId, provider, model, createdAt])
+  @@index([userId, requestId])
+  @@index([userId, operationType, createdAt])
 }
 
 enum JobRunStatus {
@@ -1215,6 +1262,9 @@ model ConnectedAccount {
   revokedAt                DateTime?
   lastErrorCode            String?
   refreshRetryAfter        DateTime?
+  refreshLeaseToken        String?
+  refreshLeaseUntil        DateTime?
+  deniedCapabilities      String[] @default([])
   revocationPendingUntil   DateTime?
   revocationErrorCode      String?
   credentialVersion        Int @default(1)
@@ -1269,6 +1319,7 @@ model IntegrationSyncState {
   lastSuccessfulSyncAt     DateTime?
   status                   IntegrationSyncStatus @default(IDLE)
   lastErrorCode            String?
+  retryAfter              DateTime?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 

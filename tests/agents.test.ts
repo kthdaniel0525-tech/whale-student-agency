@@ -252,6 +252,7 @@ describe("student metadata and execution contracts", () => {
       quiz: ["course", "documents", "learning", "memories", "profile"],
       "study-planner": [
         "assignments",
+        "availability",
         "course",
         "exams",
         "learning",

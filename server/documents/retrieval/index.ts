@@ -57,7 +57,7 @@ export async function retrieveAcademicContext(
   let vector: string;
   try {
     vector = JSON.stringify(
-      validateEmbedding(await provider.generateEmbedding(input.query)),
+      validateEmbedding(await provider.generateEmbedding(input.query, { userId, source: "rag-query" })),
     );
   } catch {
     throw new DocumentError(

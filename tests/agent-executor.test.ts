@@ -364,7 +364,7 @@ describe("AgentExecutor pipeline", () => {
     expect(messages[1].content).toContain("PRIVATE EXAM");
     expect(JSON.stringify(messages)).not.toMatch(/\[PREFERENCES\]|improve_grades/);
     expect(result.agentId).toBe("notes"); // Selection is never rerouted to Tutor.
-    expect(ai.generate.mock.calls[0][0]).toEqual({ messages });
+    expect(ai.generate.mock.calls[0][0]).toEqual({ messages, usageContext: expect.objectContaining({ agentId: "notes", ragChunkCount: 1, requestId: expect.any(String) }) });
   });
 
   it("authenticates via Context Builder even with empty requirements and omits empty reference messages", async () => {

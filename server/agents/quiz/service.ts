@@ -436,6 +436,7 @@ export class QuizAgentService {
         const provider = await this.#getProvider();
         const result = await provider.generateStructuredOutput({
           schemaName: "quiz_answer_evaluation",
+          usageContext: { userId, agentId: "quiz", operationType: "evaluation" },
           schema: semanticEvaluationSchema,
           maxOutputTokens: 512,
           messages: [

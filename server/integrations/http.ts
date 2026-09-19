@@ -11,7 +11,7 @@ export function createIntegrationHttpHandlers(service = createIntegrationService
   function call(request: Request, operation: (userId: string) => Promise<unknown>) {
     return api(request, async (userId) => {
       try { return Response.json(await operation(userId), { headers: sensitiveHeaders }); }
-      catch (cause) { if (cause instanceof z.ZodError || cause instanceof RequestError) throw cause; const error = safeIntegrationError(cause); return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: sensitiveHeaders }); }
+      catch (cause) { if (cause instanceof z.ZodError || cause instanceof RequestError) throw cause; const error = safeIntegrationError(cause); return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { ...sensitiveHeaders, ...(error.retryAfterSeconds ? { "Retry-After": String(error.retryAfterSeconds) } : {}) } }); }
     });
   }
   return {

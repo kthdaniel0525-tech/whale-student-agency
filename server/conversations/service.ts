@@ -138,11 +138,13 @@ async function embeddingProvider(options: ConversationEmbeddingOptions) {
 async function persistMessageEmbedding(
   message: ConversationMessageRecord,
   options: ConversationEmbeddingOptions,
+  userId: string,
 ): Promise<void> {
   try {
     const provider = await embeddingProvider(options);
     if (!provider) return;
     const response = await provider.generateEmbedding({
+      usageContext: { userId, conversationId: message.conversationId, source: "conversation-index" },
       input: message.content,
       dimensions: 384,
     });
@@ -293,7 +295,7 @@ export async function appendConversationMessage(
       });
     });
     const message = toConversationMessage(row);
-    await persistMessageEmbedding(message, options);
+    await persistMessageEmbedding(message, options, userId);
     return message;
   } catch (error) {
     if (error instanceof ConversationError) throw error;
@@ -436,6 +438,7 @@ async function compressOwnedConversation(input: {
       }
     : undefined;
   const generated = await generateIncrementalSummary({
+    usageContext: { userId: input.userId, conversationId: input.conversation.id, source: "conversation-summary", operationType: "summarization" },
     provider,
     previous: previousData,
     messages: selected,

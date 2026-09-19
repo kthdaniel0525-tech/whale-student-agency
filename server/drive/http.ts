@@ -16,7 +16,7 @@ export function createDriveHttp(publish?: DriveEnqueue) {
             if (cause instanceof z.ZodError || cause instanceof RequestError || cause instanceof DocumentError || cause instanceof NotFoundError)
                 throw cause;
             const error = safeIntegrationError(cause);
-            return Response.json({ error: error.message, code: error.code }, { status: error.status });
+            return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: error.retryAfterSeconds ? { "Retry-After": String(error.retryAfterSeconds) } : {} });
         }
     });
     return {

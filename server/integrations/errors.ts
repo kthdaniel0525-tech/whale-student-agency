@@ -21,6 +21,8 @@ export const INTEGRATION_ERROR_MESSAGES = {
   CONNECTION_BUSY: "A connection change is still finishing. Please try again shortly.",
   INVALID_GRANT: "Authorization has expired or been revoked. Reconnect this account.",
   PROVIDER_UNAVAILABLE: "The service is temporarily unavailable. Please try again later.",
+  PROVIDER_RATE_LIMITED: "The service is busy. Please wait before trying again.",
+  RESOURCE_ACCESS_DENIED: "You no longer have access to this external resource.",
   INVALID_RESPONSE: "The service returned an invalid response. Start the connection again.",
   ENCRYPTION_FAILURE: "Secure credentials could not be read or saved.",
   STORAGE_FAILURE: "Connection details could not be saved or loaded. Please try again.",
@@ -29,15 +31,18 @@ export type IntegrationErrorCode = keyof typeof INTEGRATION_ERROR_MESSAGES;
 /** Never retain an upstream message, response body, URL, or cause: all can contain credentials. */
 export class IntegrationError extends Error {
   readonly status: number;
-  constructor(readonly code: IntegrationErrorCode) {
+  readonly retryAfterSeconds?: number;
+  constructor(readonly code: IntegrationErrorCode, retryAfterSeconds?: number) {
     super(INTEGRATION_ERROR_MESSAGES[code]); this.name = "IntegrationError";
+    if (code === "PROVIDER_RATE_LIMITED") this.retryAfterSeconds = Math.min(3600, Math.max(30, Number.isFinite(retryAfterSeconds) ? Math.ceil(retryAfterSeconds!) : 60));
     this.status = code === "UNAUTHENTICATED" ? 401 : code === "NOT_FOUND" ? 404 :
+      code === "PROVIDER_RATE_LIMITED" ? 429 :
       ["AUTHORIZATION_REQUIRED", "RECONNECT_REQUIRED", "DISCONNECTED"].includes(code) ? 403 :
       code === "CONNECTION_BUSY" ? 409 : ["CONFIGURATION", "PROVIDER_UNAVAILABLE", "ENCRYPTION_FAILURE", "STORAGE_FAILURE"].includes(code) ? 503 : 400;
   }
 }
 export function safeIntegrationError(error: unknown): IntegrationError {
-  return error instanceof IntegrationError ? new IntegrationError(error.code) : new IntegrationError("STORAGE_FAILURE");
+  return error instanceof IntegrationError ? new IntegrationError(error.code, error.retryAfterSeconds) : new IntegrationError("STORAGE_FAILURE");
 }
 export async function protectIntegration<T>(operation: () => Promise<T>): Promise<T> {
   try { return await operation(); } catch (error) { throw safeIntegrationError(error); }

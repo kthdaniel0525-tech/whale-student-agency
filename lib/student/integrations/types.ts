@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { IntegrationHealth } from "./health";
 export const INTEGRATION_PROVIDER_IDS = ["google", "microsoft"] as const;
 export type IntegrationProviderId = typeof INTEGRATION_PROVIDER_IDS[number];
 export const INTEGRATION_CAPABILITIES = ["account-profile", "calendar-read", "calendar-write", "drive-read", "email-read"] as const;
@@ -18,6 +19,7 @@ export const startConnectionSchema = z.object({
 }).strict();
 export type StartConnectionInput = z.input<typeof startConnectionSchema>;
 export interface ConnectedAccountView {
+  health?: IntegrationHealth;
   id: string; provider: IntegrationProviderId; displayName: string | null; email: string | null;
   status: "connected" | "needs-reconnect" | "disconnected" | "error";
   capabilities: IntegrationCapability[]; connectedAt: string; lastRefreshedAt: string | null;

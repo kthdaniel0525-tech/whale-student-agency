@@ -1,4 +1,5 @@
 import "server-only";
+import { withAIUsageContext } from "../ai/usage/context";
 import { z } from "zod";
 import { db } from "../db/client";
 import { buildUserContext } from "../context/builder";
@@ -118,7 +119,7 @@ export class WorkflowService {
   }
 
   async runWorkflow(raw: WorkflowInput, requestHeaders: Headers) {
-    try { return await this.start(raw, requestHeaders); } catch (error) { throw workflowError(error); }
+    try { return await withAIUsageContext({ workflowId: raw.workflowId }, () => this.start(raw, requestHeaders)); } catch (error) { throw workflowError(error); }
   }
   private async start(raw: WorkflowInput, requestHeaders: Headers) {
     const { userId, headers } = await workflowIdentity(requestHeaders);
@@ -187,38 +188,40 @@ export class WorkflowService {
       if (!parsed.success) throw new WorkflowError("INVALID_REQUEST");
       const row = await db().workflowRun.findFirst({ where: { id: parsed.data.runId, userId } });
       if (!row) throw new WorkflowError("RUN_NOT_FOUND");
-      const context = row.context as unknown as WorkflowContext;
-      const input = parsed.data;
-      if ("careerData" in input) {
-        if (row.workflowId !== "career-preparation") throw new WorkflowError("INVALID_REQUEST");
-        if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
-        const state = careerPreparationState(context);
-        if (context.waitingFor?.kind !== "career-data" || context.waitingFor.referenceId !== state.sourceFingerprint.slice(0, 64)) throw new WorkflowError("INVALID_REQUEST");
-        await this.appendWorkflowInput(context, `workflow-resume:${row.id}:career-data`,
-          `Career evidence provided: ${JSON.stringify(input.careerData)}`, headers);
-        await prepareCareerResume(context, input.careerData, headers);
-        return this.engine().resume(careerPreparation, row.id, headers, async (saved) => prepareCareerResume(saved, input.careerData, headers), context.waitingFor);
-      }
-      if ("userWork" in input) {
-        if (row.workflowId !== "assignment-support") throw new WorkflowError("INVALID_REQUEST");
-        if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
-        if (context.waitingFor?.kind !== "student-work" || context.waitingFor.referenceId !== assignmentState(context).id) throw new WorkflowError("INVALID_REQUEST");
-        await this.appendWorkflowInput(context, `workflow-resume:${row.id}:student-work`, input.userWork, headers);
-        await validateAssignmentScope(context, headers);
-        return this.engine().resume(assignmentSupport, row.id, headers, async (saved) => {
-          await validateAssignmentScope(saved, headers);
-          return { assignment: { ...structuredClone(assignmentState(saved)), userWork: input.userWork } };
-        }, context.waitingFor);
-      }
-      const continuation = this.quizContinuation(row.workflowId, context);
-      // Repeated continuation of an already consumed attempt is idempotent,
-      // including when the workflow is now waiting for its second quiz.
-      if (continuation.consumed(input.quizAttemptId) || row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
-      await continuation.validate(context, userId, input.quizAttemptId);
-      return this.engine().resume(continuation.definition, row.id, headers, async (saved) => {
-        await continuation.validate(saved, userId, input.quizAttemptId);
-        return continuation.patch(saved, input.quizAttemptId);
-      }, context.waitingFor!);
+      return await withAIUsageContext({ userId, workflowId: row.workflowId, workflowRunId: row.id }, async () => {
+        const context = row.context as unknown as WorkflowContext;
+        const input = parsed.data;
+        if ("careerData" in input) {
+          if (row.workflowId !== "career-preparation") throw new WorkflowError("INVALID_REQUEST");
+          if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
+          const state = careerPreparationState(context);
+          if (context.waitingFor?.kind !== "career-data" || context.waitingFor.referenceId !== state.sourceFingerprint.slice(0, 64)) throw new WorkflowError("INVALID_REQUEST");
+          await this.appendWorkflowInput(context, `workflow-resume:${row.id}:career-data`,
+            `Career evidence provided: ${JSON.stringify(input.careerData)}`, headers);
+          await prepareCareerResume(context, input.careerData, headers);
+          return this.engine().resume(careerPreparation, row.id, headers, async (saved) => prepareCareerResume(saved, input.careerData, headers), context.waitingFor);
+        }
+        if ("userWork" in input) {
+          if (row.workflowId !== "assignment-support") throw new WorkflowError("INVALID_REQUEST");
+          if (row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
+          if (context.waitingFor?.kind !== "student-work" || context.waitingFor.referenceId !== assignmentState(context).id) throw new WorkflowError("INVALID_REQUEST");
+          await this.appendWorkflowInput(context, `workflow-resume:${row.id}:student-work`, input.userWork, headers);
+          await validateAssignmentScope(context, headers);
+          return this.engine().resume(assignmentSupport, row.id, headers, async (saved) => {
+            await validateAssignmentScope(saved, headers);
+            return { assignment: { ...structuredClone(assignmentState(saved)), userWork: input.userWork } };
+          }, context.waitingFor);
+        }
+        const continuation = this.quizContinuation(row.workflowId, context);
+        // Repeated continuation of an already consumed attempt is idempotent,
+        // including when the workflow is now waiting for its second quiz.
+        if (continuation.consumed(input.quizAttemptId) || row.status !== "WAITING_FOR_INPUT") return this.getRun(row.id, headers);
+        await continuation.validate(context, userId, input.quizAttemptId);
+        return this.engine().resume(continuation.definition, row.id, headers, async (saved) => {
+          await continuation.validate(saved, userId, input.quizAttemptId);
+          return continuation.patch(saved, input.quizAttemptId);
+        }, context.waitingFor!);
+      });
     } catch (error) { throw workflowError(error); }
   }
 
@@ -245,21 +248,23 @@ export class WorkflowService {
     if (parsed.data.quizAttemptId) await continuation.validate(context, userId, parsed.data.quizAttemptId, false);
     const question = await db().quizQuestion.findFirst({ where: { id: parsed.data.questionId, quizId, userId, quiz: { userId, courseId: context.courseId, course: { userId } }, topicMappings: { some: { ...(context.recovery ? { topicId: context.recovery.topicId } : {}), userId, topic: { userId } } } }, select: { id: true, prompt: true } });
     if (!question) throw new WorkflowError("REFERENCE_NOT_FOUND");
-    const quiz = new QuizAgentService(createStudentAgentRegistry(), { getProvider: this.options.getProvider });
-    let evaluation;
-    try {
-      evaluation = await quiz.evaluateAnswer({ quizId, questionId: parsed.data.questionId, userAnswer: parsed.data.userAnswer, quizAttemptId: parsed.data.quizAttemptId }, headers);
-    } catch {
-      await db().workflowRun.updateMany({ where: { id: row.id, userId, status: "WAITING_FOR_INPUT", NOT: { warnings: { has: "GRADING_FAILURE" } } }, data: { warnings: { push: "GRADING_FAILURE" } } });
-      throw new WorkflowError("GRADING_FAILURE");
-    }
-    await this.appendWorkflowInput(
-      context,
-      `workflow-answer:${row.id}:${parsed.data.questionId}:${evaluation.quizAttemptId}`,
-      `Quiz answer to ${JSON.stringify(question.prompt)}: ${parsed.data.userAnswer}`,
-      headers,
-    );
-    return evaluation;
+    return withAIUsageContext({ userId, workflowId: row.workflowId, workflowRunId: row.id, agentId: "quiz" }, async () => {
+      const quiz = new QuizAgentService(createStudentAgentRegistry(), { getProvider: this.options.getProvider });
+      let evaluation;
+      try {
+        evaluation = await quiz.evaluateAnswer({ quizId, questionId: parsed.data.questionId, userAnswer: parsed.data.userAnswer, quizAttemptId: parsed.data.quizAttemptId }, headers);
+      } catch {
+        await db().workflowRun.updateMany({ where: { id: row.id, userId, status: "WAITING_FOR_INPUT", NOT: { warnings: { has: "GRADING_FAILURE" } } }, data: { warnings: { push: "GRADING_FAILURE" } } });
+        throw new WorkflowError("GRADING_FAILURE");
+      }
+      await this.appendWorkflowInput(
+        context,
+        `workflow-answer:${row.id}:${parsed.data.questionId}:${evaluation.quizAttemptId}`,
+        `Quiz answer to ${JSON.stringify(question.prompt)}: ${parsed.data.userAnswer}`,
+        headers,
+      );
+      return evaluation;
+    });
   }
 
   /** Domain-specific references plug into one shared claim/resume/grading path. */

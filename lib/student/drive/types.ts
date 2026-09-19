@@ -32,6 +32,7 @@ export type DriveImportView = {
     error: string | null;
 };
 export type DriveSettings = {
+    health?: import("../integrations/health").IntegrationHealth;
     enabled: boolean;
     needsReconnect: boolean;
     importedCount: number;

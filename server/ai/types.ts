@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { AIUsageContext } from "./usage/types";
 
 export type AIMessage = {
   role: "system" | "user" | "assistant";
@@ -11,12 +12,15 @@ export type AITextRequest = {
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  usageContext?: AIUsageContext;
 };
 
 export type AIUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
 };
 
 export type AITextResponse = {
@@ -41,8 +45,9 @@ export type AIEmbeddingRequest = {
   model?: string;
   dimensions?: number;
   signal?: AbortSignal;
+  usageContext?: AIUsageContext;
 };
-export type AIEmbeddingResponse = { model: string; vector: number[] };
+export type AIEmbeddingResponse = { model: string; vector: number[]; usage?: AIUsage };
 
 export interface AIProvider {
   generateText(request: AITextRequest): Promise<AITextResponse>;

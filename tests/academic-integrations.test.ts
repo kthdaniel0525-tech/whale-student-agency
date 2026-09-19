@@ -117,6 +117,52 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await cleanup(); await db().jobRun.deleteMany({ where: { resourceId: { in: resources } } }); await db().user.deleteMany({ where: { id: { in: [owner.id, other.id] } } }); await db().$disconnect(); });
 describe.sequential("Provider-independent academic import", () => {
+    it("coalesces throttled course requests through a shared cooldown and recovers afterwards", async () => {
+        const list = vi.spyOn(provider, "listCourses").mockRejectedValueOnce(new AcademicIntegrationError("PROVIDER_RATE_LIMITED"));
+        await expect(service.listCourses(owner.id, accountId)).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED", status: 429 });
+        await Promise.all(Array.from({ length: 10 }, () => expect(service.listCourses(owner.id, accountId)).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED" })));
+        expect(list).toHaveBeenCalledTimes(1); expect((await service.settings(owner.id)).accounts[0].health?.state).toBe("delayed");
+        await db().integrationSyncState.updateMany({ where: { connectedAccountId: accountId }, data: { retryAfter: new Date(0) } });
+        expect((await service.listCourses(owner.id, accountId)).items).toHaveLength(1);
+        expect((await service.settings(owner.id)).accounts[0].health?.state).toBe("available");
+    });
+    it.each(["DISCONNECTED", "AUTHORIZATION_REQUIRED"] as const)("persists provider auth failure %s without repeating API calls", async code => {
+        const list = vi.spyOn(provider, "listCourses").mockRejectedValueOnce(new AcademicIntegrationError(code));
+        await expect(service.listCourses(owner.id, accountId)).rejects.toMatchObject({ code });
+        await expect(service.listCourses(owner.id, accountId)).rejects.toMatchObject({ code }); expect(list).toHaveBeenCalledTimes(1);
+        expect((await service.settings(owner.id)).accounts[0].health?.state).toBe(code === "DISCONNECTED" ? "needs-reconnect" : "missing-permission");
+    });
+    it("restores corrupt incremental checkpoints using stable mappings and a fresh snapshot", async () => {
+        const linked = await imported(academicOnly); Object.assign(provider, { incremental: "updated-since" }); await sync();
+        await db().integrationSyncState.updateMany({ where: { connectedAccountId: accountId }, data: { cursorEncrypted: "v1.retired.invalid" } });
+        const assignments = vi.spyOn(provider, "listAssignments"); await sync();
+        expect(assignments.mock.calls[0][1].updatedSince).toBeUndefined();
+        expect(await db().assignment.count({ where: { courseId: linked.courseId } })).toBe(1);
+        expect((await service.status(owner.id, linked.courseId))?.health?.state).toBe("available");
+    });
+    it("paginates 100 assignments and preserves mappings across repeated large syncs", async () => {
+        provider.assignments.set("math", Array.from({ length: 100 }, (_, i) => ({ externalId: `a-${i}`, courseExternalId: "math", title: `Assignment ${i}`, dueAt: due(2) })));
+        const linked = await imported(academicOnly); provider.calls.length = 0;
+        await sync(); expect(provider.calls.filter(c => c === "assignments")).toHaveLength(4);
+        expect(await db().assignment.count({ where: { courseId: linked.courseId } })).toBe(100);
+        await sync(); expect(await db().externalAssignmentLink.count({ where: { externalCourseLinkId: linked.id } })).toBe(100);
+    });
+    it("retains academic data and planning context during provider outage and reconnect", async () => {
+        const linked = await imported(academicOnly); await sync(); const assignment = await db().assignment.findFirstOrThrow({ where: { courseId: linked.courseId } });
+        await db().assignment.update({ where: { id: assignment.id }, data: { priority: "HIGH", estimatedHours: 7 } });
+        provider.failures.add("course"); await expect(sync()).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+        const context = () => buildUserContext({ request: "Plan my week", courseId: linked.courseId, options: getStudyPlannerAgentDefinition().contextRequirements }, owner.headers);
+        expect(JSON.stringify(await context())).toContain(assignment.title);
+        provider.failures.clear(); const next = due(4); provider.assignments.get("math")![0].dueAt = next; await sync();
+        expect(await db().assignment.findUnique({ where: { id: assignment.id } })).toMatchObject({ dueDate: new Date(next), priority: "HIGH", estimatedHours: 7 });
+        expect(JSON.stringify(await context())).toContain(next);
+        expect(await db().recommendation.count({ where: { userId: owner.id, sourceId: assignment.id } })).toBeGreaterThan(0);
+        await service.disconnect(owner.id, accountId); expect(JSON.stringify(await context())).toContain(assignment.title);
+        // Test provider reconnect restores the same account and source link.
+        await db().connectedAccount.update({ where: { id: accountId }, data: { status: "ACTIVE", deniedCapabilities: [], credentialVersion: { increment: 1 } } });
+        await db().externalCourseLink.update({ where: { id: linked.id }, data: { active: true } }); await sync();
+        expect(await db().assignment.count({ where: { courseId: linked.courseId } })).toBe(1);
+    });
     it("recovers an abandoned worker lease through the same manual sync path", async () => {
         const status = await imported(academicOnly); await sync();
         await db().integrationSyncState.updateMany({ where: { connectedAccountId: accountId }, data: { status: "SYNCING", leaseToken: "dead-worker", leaseUntil: new Date(0) } });

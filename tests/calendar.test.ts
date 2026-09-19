@@ -17,6 +17,7 @@ import { formatContextForAI } from "@/server/context/format";
 import { createPlanningBrief, createStudyPlannerAgentService } from "@/server/agents/study-planner";
 import { getStudyPlannerAgentDefinition } from "@/server/agents/study-planner/definition";
 import { syncGoogleCalendarJob, scheduleGoogleCalendarSyncJob, enqueueGoogleCalendarSync } from "@/server/jobs/sync-google-calendar";
+import { createCalendarSyncSweep } from "@/server/jobs/sync-google-calendar";
 import { registerCalendarSyncSchedule } from "@/server/jobs/schedule";
 import { getBackgroundJob } from "@/server/jobs/registry";
 import * as ai from "@/server/ai";
@@ -148,6 +149,118 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await db().jobRun.deleteMany({ where: { jobName: { in: ["sync-google-calendar", "schedule-google-calendar-sync"] }, resourceId: { in: fixtureAccountIds } } }); await db().user.deleteMany({ where: { id: { in: [owner.id, other.id] } } }); await db().$disconnect(); });
 describe.sequential("Google Calendar integration", () => {
+    it("completes OAuth read → Planner availability → incremental write consent → task event → disconnect", async () => {
+        vi.stubEnv("GOOGLE_INTEGRATION_CLIENT_ID", "hardening-client"); vi.stubEnv("GOOGLE_INTEGRATION_CLIENT_SECRET", "hardening-secret");
+        const original = http.getMockImplementation()!;
+        let scopes = [...GOOGLE_SCOPES["account-profile"], ...GOOGLE_SCOPES["calendar-read"]];
+        http.mockImplementation(async (raw, init) => {
+            const url = String(raw);
+            if (url === "https://oauth2.googleapis.com/token") return Response.json({ access_token: "calendar-test-access", refresh_token: "test-refresh", expires_in: 3600, token_type: "Bearer", scope: scopes.join(" ") });
+            if (url === "https://openidconnect.googleapis.com/v1/userinfo") return Response.json({ sub: "journey-account", email: "university@example.test", email_verified: true });
+            return original(raw, init);
+        });
+        const connect = async (write = false) => {
+            const auth = await integration.startIntegrationConnection({ provider: "google", capabilities: write ? ["calendar-read", "calendar-write"] : ["calendar-read"], ...(write ? { connectedAccountId: accountId } : {}) }, owner.headers);
+            return integration.handleIntegrationCallback("google", { state: new URL(auth.authorizationUrl).searchParams.get("state")!, code: "fixture-code" }, owner.headers);
+        };
+        accountId = (await connect()).account.id; fixtureAccountIds.push(accountId);
+        await calendar.saveSelection(owner.id, accountId, { calendars: [{ id: "primary", enabledForAvailability: true, allowStudyWrites: false, blockAllDay: false }] });
+        events.set("primary", [timed("class", "09:00", "11:00")]);
+        const context = await buildUserContext({ request: "Plan my study day", options: { profile: true, availability: true } }, owner.headers);
+        expect(context.availability?.status).toBe("available"); expect(formatContextForAI(context)).not.toMatch(/Dentist|diagnosis|journey-account|test-refresh/);
+        scopes = [...scopes, ...GOOGLE_SCOPES["calendar-write"]]; expect((await connect(true)).account.id).toBe(accountId);
+        await select(); const event = await writes.createStudyCalendarEvent(target()); expect(event.status).toBe("LINKED");
+        await integration.disconnectConnectedAccount(owner.id, accountId);
+        expect(await db().studyTask.findUnique({ where: { id: taskId } })).not.toBeNull(); expect(events.get("primary")).toHaveLength(2);
+        expect((await getUserAvailability({ userId: owner.id, start: new Date(at("09:00")), end: new Date(at("22:00")) })).status).toBe("not-connected");
+        expect((await connect(true)).account.id).toBe(accountId);
+        expect((await getUserAvailability({ userId: owner.id, start: new Date(at("09:00")), end: new Date(at("22:00")) })).status).toBe("available");
+        expect((await writes.createStudyCalendarEvent(target())).id).toBe(event.id); expect(events.get("primary")).toHaveLength(2);
+    });
+    it("keeps same calendar/event IDs isolated across two accounts when excluding the current task", async () => {
+        await select(); const second = await account(); await select(second.id);
+        await db().externalEventLink.create({ data: { userId: owner.id, connectedAccountId: accountId, studyTaskId: taskId, externalCalendarId: "primary", externalEventId: "same-event", status: "LINKED", syncedStart: new Date(at("18:00")), syncedEnd: new Date(at("18:45")) } });
+        events.set("primary", [timed("same-event", "18:00", "18:45")]);
+        const input = { userId: owner.id, start: new Date(at("09:00")), end: new Date(at("22:00")), excludeTaskId: taskId };
+        const busy = await getUserAvailability(input);
+        expect(busy.status).toBe("available"); expect(busy.days[0].availableMinutes).toBe(735);
+        await integration.disconnectConnectedAccount(owner.id, second.id);
+        const free = await getUserAvailability(input); expect(free.days[0].availableMinutes).toBe(780);
+        expect((await integration.getConnectedAccount(owner.id, accountId)).status).toBe("connected");
+    });
+    it("paginates 750 events with exactly three bounded listing requests", async () => {
+        await select(); events.set("primary", Array.from({ length: 750 }, (_, i) => timed(`event-${i}`, "10:00", "11:00")));
+        http.mockClear(); await calendar.syncAccount(owner.id, accountId);
+        expect(http.mock.calls).toHaveLength(3);
+        expect(cachedEvents(await db().calendarIntegrationPreference.findFirstOrThrow({ where: { connectedAccountId: accountId } }))).toHaveLength(750);
+    });
+    it("recovers a corrupt checkpoint through a full atomic snapshot", async () => {
+        await select(); await calendar.syncAccount(owner.id, accountId);
+        await db().integrationSyncState.updateMany({ where: { connectedAccountId: accountId }, data: { cursorEncrypted: "v9.retired.corrupt" } });
+        events.set("primary", [timed("new", "10:00", "11:00")]); http.mockClear(); await calendar.syncAccount(owner.id, accountId, true);
+        expect(new URL(String(http.mock.calls[0][0])).searchParams.has("syncToken")).toBe(false);
+        expect((await calendar.getSettings(owner.id, accountId)).health?.state).toBe("available");
+    });
+    it("does not mark a stale snapshot fresh when a later metadata request succeeds", async () => {
+        await select(); await calendar.syncAccount(owner.id, accountId);
+        const key = { connectedAccountId: accountId, integrationType: "calendar-read" };
+        const before = await db().integrationSyncState.findUniqueOrThrow({ where: { connectedAccountId_integrationType: key } });
+        vi.setSystemTime(new Date(NOW.getTime() + 6 * 60000)); failures = true;
+        await expect(calendar.syncAccount(owner.id, accountId, true)).rejects.toBeTruthy();
+        failures = false; await calendar.listCalendars(owner.id, accountId);
+        const after = await db().integrationSyncState.findUniqueOrThrow({ where: { connectedAccountId_integrationType: key } });
+        expect(after.lastSuccessfulSyncAt).toEqual(before.lastSuccessfulSyncAt); expect(after.status).toBe("FAILED");
+        expect((await calendar.getSettings(owner.id, accountId)).health?.state).toBe("delayed");
+    });
+    it("stops cancelled pagination without publishing a partial cache", async () => {
+        await select(); pageSize = 1; events.set("primary", [timed("one", "10:00", "11:00"), timed("two", "12:00", "13:00")]);
+        const abort = new AbortController(); readHook = async () => { abort.abort(); }; http.mockClear();
+        await expect(calendar.syncAccount(owner.id, accountId, true, abort.signal)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+        expect(http.mock.calls).toHaveLength(1);
+        expect(cachedEvents(await db().calendarIntegrationPreference.findFirstOrThrow({ where: { connectedAccountId: accountId } }))).toHaveLength(0);
+    });
+    it("honors rate limits during availability refresh and reports delayed sync", async () => {
+        await select(); http.mockResolvedValueOnce(new Response("busy", { status: 429, headers: { "retry-after": "120" } }));
+        const input = { userId: owner.id, start: new Date(at("09:00")), end: new Date(at("22:00")) };
+        expect((await getUserAvailability(input)).status).toBe("unavailable"); http.mockClear();
+        expect((await getUserAvailability(input)).days).toEqual([]); expect(http).not.toHaveBeenCalled();
+        expect((await calendar.getSettings(owner.id, accountId)).health?.state).toBe("delayed");
+    });
+    it("rechecks a Calendar change after the initial planning snapshot before writing", async () => {
+        await select(); await calendar.syncAccount(owner.id, accountId);
+        events.set("primary", [timed("late-meeting", "18:00", "19:00")]);
+        await expect(writes.createStudyCalendarEvent(target())).rejects.toMatchObject({ code: "CALENDAR_CONFLICT" });
+        expect(http.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    });
+    it("deduplicates manual and scheduled requests beyond the 30 second debounce bucket", async () => {
+        await select(); const sendDebounced = vi.fn().mockImplementation(async (_name, _payload, options) => options.id);
+        const first = await enqueueGoogleCalendarSync(accountId, { sendDebounced }, true);
+        expect(sendDebounced.mock.calls[0][2].startAfter.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+        expect(sendDebounced.mock.calls[0][2].startAfter.getTime()).toBeLessThan(NOW.getTime() + 60000);
+        vi.setSystemTime(new Date(NOW.getTime() + 31000));
+        expect((await enqueueGoogleCalendarSync(accountId, { sendDebounced })).id).toBe(first.id);
+        expect(sendDebounced).toHaveBeenCalledTimes(1);
+    });
+    it("isolates failed account publication in a bounded scheduled batch", async () => {
+        await select(); const second = await account(); await select(second.id);
+        const enqueue = vi.fn().mockRejectedValueOnce(new Error("queue failure")).mockResolvedValue({ id: "queued", deduplicated: false });
+        const result = await createCalendarSyncSweep(enqueue).handler({ signal: new AbortController().signal, payload: { version: 1 }, attempt: 1, jobRunId: "sweep" });
+        expect(enqueue.mock.calls.length).toBeGreaterThanOrEqual(2); expect(enqueue.mock.calls.length).toBeLessThanOrEqual(100);
+        expect(result).toMatchObject({ failed: 1, enqueued: enqueue.mock.calls.length - 1 });
+    });
+    it.each([["2026-03-08", "2026-03-09", 23], ["2026-11-01", "2026-11-02", 25]] as const)("keeps all-day events on the provider's DST date %s", async (day, next, hours) => {
+        vi.setSystemTime(new Date(`${day}T00:00Z`));
+        await db().connectedAccount.update({ where: { id: accountId }, data: { accessTokenExpiresAt: new Date("2027-01-01T00:00Z") } });
+        await select(); events.set("primary", [{ id: "all-day", eventType: "outOfOffice", start: { date: day, timeZone: "America/Winnipeg" }, end: { date: next, timeZone: "America/Winnipeg" } }]);
+        await calendar.syncAccount(owner.id, accountId);
+        const stored = cachedEvents(await db().calendarIntegrationPreference.findFirstOrThrow({ where: { connectedAccountId: accountId } }))[0];
+        expect(Date.parse(stored.end!) - Date.parse(stored.start!)).toBe(hours * 3600000); expect(stored.blocksTime).toBe(true);
+    });
+    it("keeps cross-midnight offset events in the correct user's availability day", async () => {
+        await select(); events.set("primary", [{ id: "overnight", start: { dateTime: "2026-09-20T23:30:00-10:00" }, end: { dateTime: "2026-09-21T01:00:00-10:00" } }]);
+        const result = await getUserAvailability({ userId: owner.id, start: new Date(at("09:00")), end: new Date(at("12:00")), excludeTaskId: taskId });
+        expect(result.days[0].freeWindows.map(w => [w.start, w.end])).toEqual([[at("09:00"), at("09:30")], [at("11:00"), at("12:00")]]);
+    });
     it("requests read scopes without write, with calendar-list permission", () => { const p = new GoogleIntegrationProvider(); expect(p.scopesFor(["calendar-read"])).toContain(GOOGLE_SCOPES["calendar-read"][1]); expect(p.scopesFor(["calendar-read"])).not.toContain(GOOGLE_SCOPES["calendar-write"][0]); expect(p.capabilitiesFor([GOOGLE_SCOPES["calendar-read"][0]])).not.toContain("calendar-read"); });
     it("checks read permission before any API call", async () => { await db().connectedAccount.update({ where: { id: accountId }, data: { scopes: [...GOOGLE_SCOPES["account-profile"]] } }); await expect(calendar.listCalendars(owner.id, accountId)).rejects.toMatchObject({ code: "AUTHORIZATION_REQUIRED" }); expect(http).not.toHaveBeenCalled(); });
     it("lists calendars and persists only explicit selections", async () => { expect(await calendar.listCalendars(owner.id, accountId)).toHaveLength(3); await select(); expect((await calendar.getSettings(owner.id, accountId, true)).calendars.map(c => [c.id, c.enabledForAvailability])).toEqual([["primary", true], ["university", false], ["birthdays", false]]); });
@@ -177,7 +290,7 @@ describe.sequential("Google Calendar integration", () => {
     it("recognizes external deletion and does not recreate on sync or update", async () => { await select(); const first = await writes.createStudyCalendarEvent(target()); const row = await db().externalEventLink.findUniqueOrThrow({ where: { id: first.id } }); events.set("primary", [{ id: row.externalEventId, status: "cancelled" }]); await calendar.syncAccount(owner.id, accountId, true); expect((await db().externalEventLink.findUniqueOrThrow({ where: { id: first.id } })).status).toBe("MISSING"); http.mockClear(); await writes.updateStudyCalendarEvent(target()); expect(http.mock.calls.some(([, i]) => i?.method === "POST")).toBe(false); });
     it("explicit re-add after removal creates a new linked event", async () => { await select(); await writes.createStudyCalendarEvent(target()); await writes.removeStudyCalendarEvent(target()); expect((await writes.createStudyCalendarEvent(target())).status).toBe("LINKED"); expect(events.get("primary")).toHaveLength(1); });
     it("protects account, task and link ownership", async () => { await select(); await expect(writes.createStudyCalendarEvent({ ...target(), userId: other.id })).rejects.toMatchObject({ code: "NOT_FOUND" }); const foreignAccount = await account(other); await expect(writes.createStudyCalendarEvent({ ...target(), connectedAccountId: foreignAccount.id })).rejects.toMatchObject({ code: "NOT_FOUND" }); await expect(writes.getTaskOptions(other.id, taskId)).rejects.toMatchObject({ code: "NOT_FOUND" }); expect(http.mock.calls.some(([, i]) => i?.method === "POST")).toBe(false); });
-    it("disconnect disables selections and jobs without deleting Google events", async () => { await select(); await writes.createStudyCalendarEvent(target()); await integration.disconnectConnectedAccount(owner.id, accountId); http.mockClear(); expect(await syncGoogleCalendarJob.handler({ payload: { version: 1, connectedAccountId: accountId }, signal: new AbortController().signal, attempt: 1, jobRunId: "test" })).toEqual({ skipped: true }); await expect(writes.removeStudyCalendarEvent(target())).rejects.toMatchObject({ code: "DISCONNECTED" }); expect(http).not.toHaveBeenCalled(); expect(events.get("primary")).toHaveLength(1); expect(await db().calendarIntegrationPreference.count({ where: { connectedAccountId: accountId } })).toBe(0); });
+    it("disconnect disables selections and jobs without deleting Google events", async () => { await select(); await writes.createStudyCalendarEvent(target()); await integration.disconnectConnectedAccount(owner.id, accountId); http.mockClear(); expect(await syncGoogleCalendarJob.handler({ payload: { version: 1, connectedAccountId: accountId }, signal: new AbortController().signal, attempt: 1, jobRunId: "test" })).toEqual({ skipped: true }); await expect(writes.removeStudyCalendarEvent(target())).rejects.toMatchObject({ code: "DISCONNECTED" }); expect(http).not.toHaveBeenCalled(); expect(events.get("primary")).toHaveLength(1); expect(cachedEvents(await db().calendarIntegrationPreference.findFirstOrThrow({ where: { connectedAccountId: accountId } }))).toEqual([]); });
     it("background sync derives ownership from the account and registers periodic scheduling", async () => { await select(); expect(getBackgroundJob("sync-google-calendar")).toBe(syncGoogleCalendarJob); expect(getBackgroundJob("schedule-google-calendar-sync")).toBe(scheduleGoogleCalendarSyncJob); expect(await syncGoogleCalendarJob.handler({ payload: { version: 1, connectedAccountId: accountId }, signal: new AbortController().signal, attempt: 1, jobRunId: "test" })).toEqual({ synced: true }); const schedule = vi.fn().mockResolvedValue(undefined); expect(await registerCalendarSyncSchedule({ schedule }, { enabled: true })).toBe(true); expect(schedule.mock.calls[0][1]).toBe("*/15 * * * *"); });
     it("on-demand refresh uses the same ownership-checked job", async () => { await select(); const enqueue = vi.fn().mockResolvedValue({ id: "queued" }); const routes = createCalendarHttpHandlers(calendar, writes, enqueue); expect((await routes.refresh(req("POST"), accountId)).status).toBe(200); expect(enqueue).toHaveBeenCalledWith(accountId); expect((await routes.refresh(req("POST", undefined, other), accountId)).status).toBe(404); expect(enqueue).toHaveBeenCalledTimes(1); });
     it("enqueues per-account idempotent jobs without frontend user identity", async () => { await select(); const sendDebounced = vi.fn().mockImplementation(async (_name, _data, options) => options.id); const a = await enqueueGoogleCalendarSync(accountId, { sendDebounced }); const b = await enqueueGoogleCalendarSync(accountId, { sendDebounced }); expect(a.id).toBe(b.id); expect(sendDebounced).toHaveBeenCalledTimes(1); expect(sendDebounced.mock.calls[0][1]).not.toHaveProperty("userId"); expect(sendDebounced.mock.calls[0][2].group.id).toBe(accountId); });

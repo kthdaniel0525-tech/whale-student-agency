@@ -1,4 +1,5 @@
 import "server-only";
+import { bindUsageOwner } from "../ai/usage/context";
 import { availabilityContext } from "./availability";
 import { auth } from "@/server/auth/config";
 import { assertCourse, getDocument } from "@/server/documents/service";
@@ -179,7 +180,7 @@ export async function buildUserContext(
     }
   }
   const estimatedContextSize = size();
-  return {
+  return bindUsageOwner({
     ...data,
     metadata: {
       generatedAt: now.toISOString(),
@@ -194,5 +195,5 @@ export async function buildUserContext(
       estimatedTokens: Math.ceil(estimatedContextSize / 4),
       maxCharacters: input.options.limits.maxCharacters,
     },
-  };
+  }, userId);
 }

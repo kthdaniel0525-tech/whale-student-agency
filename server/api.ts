@@ -1,4 +1,5 @@
 import "server-only";
+import { captureUsageContext, withAIUsageContext } from "./ai/usage/context";
 import { DocumentError } from "@/server/documents/config";
 import { z } from "zod";
 import { auth } from "@/server/auth/config";
@@ -78,12 +79,14 @@ export async function api(
     ) {
       throw new RequestError("Complete onboarding first.", 403);
     }
-    const result = await operation(session.user.id);
+    const usageContext = captureUsageContext({ userId: session.user.id });
+    const result = await withAIUsageContext(usageContext, () => operation(session.user.id));
     if (result instanceof Response) {
       result.headers.set("Cache-Control", "private, no-store");
+      result.headers.set("X-Request-ID", usageContext.requestId!);
       return result;
     }
-    return Response.json(result ?? { success: true }, { headers: noStore });
+    return Response.json(result ?? { success: true }, { headers: { ...noStore, "X-Request-ID": usageContext.requestId! } });
   } catch (error) {
     if (error instanceof z.ZodError)
       return Response.json(

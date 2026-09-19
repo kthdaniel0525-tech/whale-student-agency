@@ -1,4 +1,6 @@
 import "server-only";
+import { captureUsageContext, usageOwner, withAIUsageContext, withAIUsageStream } from "../../ai/usage/context";
+import type { AIUsageContext } from "../../ai/usage/types";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AIError } from "../../ai/errors";
@@ -102,6 +104,7 @@ async function defaultProvider(): Promise<AIProvider> {
 }
 
 type PreparedExecution<Extension extends string> = {
+  usageContext: AIUsageContext;
   started: number;
   agent: Agent<Extension>;
   messages: ReturnType<typeof buildExecutionPrompt>;
@@ -171,6 +174,10 @@ export class AgentExecutor<Extension extends string = never> {
     input: AgentExecutionRequest<Extension>,
     requestHeaders: Headers,
   ): Promise<AgentExecutionResult<unknown, Extension>> {
+    return withAIUsageContext({ agentId: input.agentId }, () => this.executeScoped(input, requestHeaders));
+  }
+
+  private async executeScoped(input: AgentExecutionRequest<Extension>, requestHeaders: Headers): Promise<AgentExecutionResult<unknown, Extension>> {
     let providerPromise: Promise<AIProvider> | undefined;
     const getProvider = () =>
       (providerPromise ??= Promise.resolve(this.#getProvider()));
@@ -178,7 +185,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       const response = responseSchema.safeParse(
-        await provider.generateText({ messages: prepared.messages }),
+        await provider.generateText({ messages: prepared.messages, usageContext: prepared.usageContext }),
       );
       if (!response.success) throw new AIError("INVALID_RESPONSE");
       await this.persistAssistant(prepared, response.data.text);
@@ -192,10 +199,14 @@ export class AgentExecutor<Extension extends string = never> {
 
   /** Streams ordinary text responses while preserving the same authenticated
    * Context Builder, conversation, persistence, and adaptation boundaries. */
-  async *stream(
+  stream(
     input: AgentExecutionRequest<Extension>,
     requestHeaders: Headers,
   ): AsyncGenerator<{ type: "text-delta"; text: string }, AgentExecutionResult<unknown, Extension>> {
+    return withAIUsageStream({ agentId: input.agentId }, () => this.streamScoped(input, requestHeaders));
+  }
+
+  private async *streamScoped(input: AgentExecutionRequest<Extension>, requestHeaders: Headers): AsyncGenerator<{ type: "text-delta"; text: string }, AgentExecutionResult<unknown, Extension>> {
     let providerPromise: Promise<AIProvider> | undefined;
     const getProvider = () =>
       (providerPromise ??= Promise.resolve(this.#getProvider()));
@@ -203,7 +214,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       let completed: unknown;
-      for await (const event of provider.streamText({ messages: prepared.messages })) {
+      for await (const event of provider.streamText({ messages: prepared.messages, usageContext: prepared.usageContext })) {
         if (event.type === "text-delta") yield event;
         else completed = event.response;
       }
@@ -223,6 +234,10 @@ export class AgentExecutor<Extension extends string = never> {
     requestHeaders: Headers,
     output: AgentStructuredExecutionOptions<T>,
   ): Promise<AgentExecutionResult<T, Extension>> {
+    return withAIUsageContext({ agentId: input.agentId }, () => this.executeStructuredScoped(input, requestHeaders, output));
+  }
+
+  private async executeStructuredScoped<T>(input: AgentExecutionRequest<Extension>, requestHeaders: Headers, output: AgentStructuredExecutionOptions<T>): Promise<AgentExecutionResult<T, Extension>> {
     if (
       !/^[A-Za-z0-9_-]{1,64}$/.test(output.schemaName) ||
       (output.referenceData !== undefined && (!output.referenceData.trim() || output.referenceData.length > 12000)) ||
@@ -263,6 +278,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       const response = await provider.generateStructuredOutput({
+        usageContext: prepared.usageContext,
         messages: prepared.messages,
         schemaName: output.schemaName,
         schema: output.schema,
@@ -459,6 +475,23 @@ export class AgentExecutor<Extension extends string = never> {
 
     return {
       started,
+      usageContext: captureUsageContext({
+        ...(usageOwner(context) ? { userId: usageOwner(context) } : {}),
+        agentId: agent.id,
+        ...(conversation ? { conversationId: conversation.id } : {}),
+        ...(agent.id === "study-planner" ? { operationType: "workflow-planning" as const } : {}),
+        estimatedContextTokens: context.metadata.estimatedTokens,
+        ragChunkCount: context.documents?.length ?? 0,
+        retrievedTokenEstimate: Math.ceil((context.documents ?? []).reduce((sum, d) => sum + d.content.length, 0) / 4),
+        memoriesUsed: context.memories?.length ?? 0,
+        personalizationFieldsUsed: personalization.metadata.appliedSignals.length,
+        ...(conversationContext ? {
+          conversationSummaryUsed: conversationContext.metadata.summaryUsed,
+          recentMessageCount: conversationContext.metadata.recentMessagesUsed,
+          historicalMessageCount: conversationContext.metadata.historicalMessagesUsed,
+          estimatedConversationTokens: conversationContext.metadata.estimatedConversationTokens,
+        } : {}),
+      }),
       agent,
       messages,
       sources,

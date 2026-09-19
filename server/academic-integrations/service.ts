@@ -1,4 +1,6 @@
 import "server-only";
+import { integrationHealth } from "../integrations/health";
+import { recordIntegrationMetric } from "../integrations/metrics";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma, ExternalCourseLink } from "@/generated/prisma/client";
@@ -136,11 +138,13 @@ export function createAcademicIntegrationService(dependencies: {
         if (!link)
             return null;
         const state = await db().integrationSyncState.findUnique({ where: { connectedAccountId_integrationType: { connectedAccountId: link.connectedAccountId, integrationType: syncKey(link.id) } } });
+        const account = await db().connectedAccount.findFirstOrThrow({ where: { id: link.connectedAccountId, userId }, include: { syncStates: { where: { integrationType: { in: [syncKey(link.id), "courses-read", "assignments-read", "assessments-read", "files-read"] } } } } });
+        const health = integrationHealth(account, account.syncStates);
         const providerName = registry.list().find(p => p.id === link.provider)?.name ?? "External LMS";
         const syncing = state?.status === "SYNCING" && Boolean(state.leaseUntil && state.leaseUntil.getTime() > Date.now());
         const abandoned = state?.status === "SYNCING" && !syncing;
         const pending = link.active && !abandoned && Boolean(link.requestQueuedAt && link.requestQueuedAt.getTime() > Date.now() - 600000);
-        return { id: link.id, courseId, providerName, active: link.active, pending, status: !link.active ? "paused" : syncing ? "syncing" : abandoned ? "failed" : pending ? "queued" : link.lastResult && (link.lastResult as unknown as CourseSyncResult).partial ? "partial" : state?.status === "FAILED" ? "failed" : state?.status === "COMPLETED" ? "synced" : "not-synced", lastSyncedAt: state?.lastSyncCompletedAt?.toISOString() ?? null, lastSuccessAt: state?.lastSuccessfulSyncAt?.toISOString() ?? null, result: link.lastResult as CourseSyncResult | null };
+        return { health, id: link.id, courseId, providerName, active: link.active && ["ACTIVE", "ERROR"].includes(account.status), pending, status: !link.active ? "paused" : syncing ? "syncing" : abandoned ? "failed" : pending ? "queued" : link.lastResult && (link.lastResult as unknown as CourseSyncResult).partial ? "partial" : state?.status === "FAILED" ? "failed" : state?.status === "COMPLETED" ? "synced" : "not-synced", lastSyncedAt: state?.lastSyncCompletedAt?.toISOString() ?? null, lastSuccessAt: state?.lastSuccessfulSyncAt?.toISOString() ?? null, result: link.lastResult as CourseSyncResult | null };
     }
     async function requestSync(userId: string, courseId: string, scheduled = false) {
         await assertCourse(userId, courseId);
@@ -163,6 +167,7 @@ export function createAcademicIntegrationService(dependencies: {
         return status(userId, courseId);
     }
     async function syncExternalCourse(userId: string, accountId: string, externalCourseId: string, incomingSignal?: AbortSignal) {
+        const started = performance.now();
         const signal = incomingSignal ? AbortSignal.any([incomingSignal, AbortSignal.timeout(academicSyncConfig().timeoutMs)]) : AbortSignal.timeout(academicSyncConfig().timeoutMs);
         const token = randomUUID(), result = blankResult();
         const original = await db().externalCourseLink.findUnique({ where: linkKey(accountId, externalCourseId) });
@@ -199,7 +204,7 @@ export function createAcademicIntegrationService(dependencies: {
         };
         let transient = false, filesRead = false;
         const error = (kind: string, cause: unknown, externalId?: string) => { const safe = cause instanceof DocumentError || cause instanceof z.ZodError ? new AcademicIntegrationError("INVALID_RESPONSE") : academicError(cause); result.failed++; result.partial = true; if (result.errors.length < 20)
-            result.errors.push({ kind, externalId, code: safe.code }); if (["PROVIDER_UNAVAILABLE", "STORAGE_FAILURE"].includes(safe.code))
+            result.errors.push({ kind, externalId, code: safe.code }); if (["PROVIDER_UNAVAILABLE", "PROVIDER_RATE_LIMITED", "STORAGE_FAILURE"].includes(safe.code))
             transient = true; if (["DISCONNECTED", "AUTHORIZATION_REQUIRED"].includes(safe.code))
             academicEvent("AUTH_FAILURE", link.id); };
         const checkpoints: Record<string, string> = {};
@@ -207,8 +212,10 @@ export function createAcademicIntegrationService(dependencies: {
             academicEvent("SYNC_STARTED", link.id);
             const externalCourse = await checkedCourse(userId, accountId, externalCourseId, signal);
             const incremental = (await access.authorize(userId, accountId, "courses-read")).provider.incremental;
-            if (state.cursorEncrypted)
-                Object.assign(checkpoints, JSON.parse(getTokenEncryptionService().decrypt(state.cursorEncrypted, credentialContext(userId, link.provider, state.id, "sync-cursor"))));
+            if (state.cursorEncrypted) {
+                try { Object.assign(checkpoints, z.record(z.string().max(10000)).parse(JSON.parse(getTokenEncryptionService().decrypt(state.cursorEncrypted, credentialContext(userId, link.provider, state.id, "sync-cursor"))))); }
+                catch { /* Resume from a bounded full snapshot; mappings preserve existing copies. */ }
+            }
             for (const kind of ["assignments", "assessments", "files"] as const) {
                 if (!options[kind])
                     continue;
@@ -328,6 +335,8 @@ export function createAcademicIntegrationService(dependencies: {
             });
             await refreshRecommendationsBestEffort(userId);
             academicEvent(result.failed ? "PARTIAL_FAILURE" : "SYNC_COMPLETED", link.id, { created: result.created.assignments + result.created.assessments + result.created.files, updated: result.updated.assignments + result.updated.assessments + result.updated.files, failed: result.failed });
+            recordIntegrationMetric(result.failed ? "syncFailures" : "syncSuccesses", performance.now() - started);
+            recordIntegrationMetric("importsProcessed", 0, result.created.files + result.updated.files);
             if (transient)
                 throw new AcademicIntegrationError("PROVIDER_UNAVAILABLE");
             return { skipped: false, failed: result.failed };
@@ -344,6 +353,7 @@ export function createAcademicIntegrationService(dependencies: {
                 return true;
             });
             if (recorded) {
+                recordIntegrationMetric("syncFailures", performance.now() - started);
                 academicEvent("PARTIAL_FAILURE", link.id, { created: result.created.assignments + result.created.assessments + result.created.files, updated: result.updated.assignments + result.updated.assessments + result.updated.files, failed: result.failed });
                 await refreshRecommendationsBestEffort(userId);
             }
@@ -396,8 +406,8 @@ export function createAcademicIntegrationService(dependencies: {
     }
     async function settings(userId: string): Promise<AcademicSettings> {
         const providers = registry.list();
-        const accounts = await db().connectedAccount.findMany({ where: { userId, provider: { in: providers.map(p => p.id) } }, select: { id: true, provider: true, displayName: true, email: true, status: true, scopes: true, connectionConfig: true } });
-        return { providers: providers.filter(p => p.productionReady).map(p => ({ id: p.id, name: p.name })), accounts: accounts.map(a => ({ id: a.id, provider: a.provider, name: a.displayName ?? a.email ?? registry.get(a.provider).name, connected: ["ACTIVE", "ERROR"].includes(a.status), capabilities: [...registry.get(a.provider).grantedCapabilities({ id: a.id, userId, provider: a.provider, configuration: a.connectionConfig, grants: a.scopes })] })) };
+        const accounts = await db().connectedAccount.findMany({ where: { userId, provider: { in: providers.map(p => p.id) } }, select: { id: true, provider: true, displayName: true, email: true, status: true, scopes: true, connectionConfig: true, deniedCapabilities: true, lastErrorCode: true, refreshRetryAfter: true, syncStates: true } });
+        return { providers: providers.filter(p => p.productionReady).map(p => ({ id: p.id, name: p.name })), accounts: accounts.map(a => ({ health: integrationHealth(a, a.syncStates), id: a.id, provider: a.provider, name: a.displayName ?? a.email ?? registry.get(a.provider).name, connected: ["ACTIVE", "ERROR"].includes(a.status), capabilities: [...registry.get(a.provider).grantedCapabilities({ id: a.id, userId, provider: a.provider, configuration: a.connectionConfig, grants: a.scopes })].filter(capability => !a.deniedCapabilities.includes(capability)) })) };
     }
     async function listCourses(userId: string, accountId: string, cursor?: string) {
         return access.call(userId, accountId, "courses-read", AbortSignal.timeout(15000), async (call, p) => { const raw = await p.listCourses(call, { cursor, limit: academicSyncConfig().pageSize }); const parsed = z.object({ items: z.array(externalCourseSchema).max(25), nextCursor: z.string().max(2048).optional(), mode: z.literal("snapshot") }).safeParse(raw); if (!parsed.success || parsed.data.items.some(c => c.connectedAccountId !== accountId || c.provider !== p.id))

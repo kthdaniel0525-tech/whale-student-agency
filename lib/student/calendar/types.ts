@@ -37,6 +37,7 @@ export interface CalendarChoice {
     blockAllDay: boolean;
 }
 export interface CalendarSettings {
+    health?: import("../integrations/health").IntegrationHealth;
     calendars: CalendarChoice[];
     sync: {
         status: string;

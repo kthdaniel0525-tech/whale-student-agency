@@ -16,7 +16,7 @@ export function createCalendarHttpHandlers(calendar = googleCalendarService, wri
             if (cause instanceof z.ZodError || cause instanceof RequestError)
                 throw cause;
             const error = safeIntegrationError(cause);
-            return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { "Cache-Control": "private, no-store" } });
+            return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { "Cache-Control": "private, no-store", ...(error.retryAfterSeconds ? { "Retry-After": String(error.retryAfterSeconds) } : {}) } });
         }
     });
     return {

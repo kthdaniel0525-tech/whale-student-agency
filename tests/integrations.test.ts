@@ -91,6 +91,80 @@ const req = (method: string, data?: unknown, user = owner) => new Request("http:
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; };
 
 describe.sequential("Integration OAuth foundation", () => {
+  async function calendarConnection() {
+    h.state.scopes.push(...GOOGLE_SCOPES["calendar-read"], ...GOOGLE_SCOPES["drive-read"]);
+    const { account } = await h.connect({ capabilities: ["calendar-read", "drive-read"] });
+    const read = () => h.service.withProviderClient({ userId: owner.id, connectedAccountId: account.id, provider: "google", capability: "calendar-read" }, client => client.read({ path: "calendars/primary/events" }));
+    return { account, read };
+  }
+  it("refreshes a provider-rejected access token once and continues the original operation", async () => {
+    const { account, read } = await calendarConnection();
+    h.http.mockResolvedValueOnce(Response.json({ private: secrets.access }, { status: 401 }));
+    expect(await read()).toEqual({ items: [] }); expect(h.refreshCalls()).toHaveLength(1);
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).health?.auth).toBe("healthy");
+  });
+  it("stops future calls after the refreshed token is also rejected", async () => {
+    const { account, read } = await calendarConnection(); const original = h.http.getMockImplementation()!;
+    h.http.mockImplementation(async (url, init) => String(url).includes("/calendar/v3/") ? Response.json({}, { status: 401 }) : original(url, init));
+    await expect(read()).rejects.toMatchObject({ code: "RECONNECT_REQUIRED" });
+    expect(h.refreshCalls()).toHaveLength(1); h.http.mockClear();
+    await expect(read()).rejects.toMatchObject({ code: "RECONNECT_REQUIRED" }); expect(h.http).not.toHaveBeenCalled();
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).health?.state).toBe("needs-reconnect");
+  });
+  it("persists scope loss for only the affected capability and clears it on incremental consent", async () => {
+    const { account, read } = await calendarConnection();
+    h.http.mockResolvedValueOnce(Response.json({ error: { errors: [{ reason: "insufficientPermissions" }] } }, { status: 403 }));
+    await expect(read()).rejects.toMatchObject({ code: "AUTHORIZATION_REQUIRED" }); h.http.mockClear();
+    await expect(read()).rejects.toMatchObject({ code: "AUTHORIZATION_REQUIRED" }); expect(h.http).not.toHaveBeenCalled();
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).capabilities).toContain("drive-read");
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).health?.state).toBe("missing-permission");
+    await h.connect({ connectedAccountId: account.id, capabilities: ["calendar-read"] });
+    expect(await read()).toEqual({ items: [] }); expect(await db().connectedAccount.count({ where: { userId: owner.id } })).toBe(1);
+  });
+  it("does not mistake a single resource permission failure for account scope revocation", async () => {
+    const { account, read } = await calendarConnection();
+    h.http.mockResolvedValueOnce(Response.json({ error: { errors: [{ reason: "forbidden" }] } }, { status: 403 }));
+    await expect(read()).rejects.toMatchObject({ code: "RESOURCE_ACCESS_DENIED" });
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).capabilities).toContain("calendar-read");
+    expect(await read()).toEqual({ items: [] });
+  });
+  it.each([429, 403])("normalizes rate limiting (%s), clamps Retry-After and suppresses repeat network calls", async status => {
+    const { account, read } = await calendarConnection();
+    h.http.mockResolvedValueOnce(Response.json({ error: { errors: [{ reason: "rateLimitExceeded" }], secret: secrets.access } }, { status, headers: { "retry-after": "120" } }));
+    await expect(read()).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED", status: 429, retryAfterSeconds: 120 });
+    h.http.mockClear(); await Promise.all(Array.from({ length: 12 }, () => expect(read()).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED" })));
+    expect(h.http).not.toHaveBeenCalled();
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).health?.state).toBe("delayed");
+    vi.setSystemTime(new Date(NOW.getTime() + 121000)); expect(await read()).toEqual({ items: [] });
+  });
+  it.each(["invalid-blob", "v9.old.aa.bb.cc", "v1.unknown.aa.bb.cc"])("quarantines corrupt credentials (%s) without repeated decryption attempts", async blob => {
+    const { account } = await h.connect();
+    await db().connectedAccount.update({ where: { id: account.id }, data: { accessTokenEncrypted: blob } });
+    await expect(h.service.getValidAccessToken(owner.id, account.id)).rejects.toMatchObject({ code: "ENCRYPTION_FAILURE" });
+    await expect(h.service.getValidAccessToken(owner.id, account.id)).rejects.toMatchObject({ code: "RECONNECT_REQUIRED" });
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).health?.auth).toBe("needs-reconnect");
+  });
+  it("recovers a lease left by a terminated worker", async () => {
+    const { account } = await h.connect(); await h.expire(account.id);
+    await db().connectedAccount.update({ where: { id: account.id }, data: { refreshLeaseToken: "old-worker", refreshLeaseUntil: new Date(NOW.getTime() - 1) } });
+    expect(await h.service.getValidAccessToken(owner.id, account.id)).toBe("secret-access-B"); expect(h.refreshCalls()).toHaveLength(1);
+  });
+  it("preserves encrypted credentials during temporary key-store configuration failure", async () => {
+    const { account } = await h.connect();
+    const before = await db().connectedAccount.findUniqueOrThrow({ where: { id: account.id } });
+    const unavailable = createIntegrationService({ registry: h.registry, encryption: () => { throw new IntegrationError("CONFIGURATION"); } });
+    await expect(unavailable.getValidAccessToken(owner.id, account.id)).rejects.toMatchObject({ code: "CONFIGURATION" });
+    expect(await db().connectedAccount.findUnique({ where: { id: account.id } })).toMatchObject({ status: "ERROR", refreshTokenEncrypted: before.refreshTokenEncrypted, accessTokenEncrypted: before.accessTokenEncrypted });
+    vi.setSystemTime(new Date(NOW.getTime() + 61000)); expect(await h.service.getValidAccessToken(owner.id, account.id)).toBe(secrets.access);
+  });
+  it("does not overwrite a reconnect that wins while an older refresh is in flight", async () => {
+    const { account } = await h.connect(); await h.expire(account.id);
+    const entered = deferred(), release = deferred(); h.state.refreshHook = async () => { entered.resolve(); await release.promise; };
+    const refresh = h.service.getValidAccessToken(owner.id, account.id); await entered.promise;
+    await h.connect({ connectedAccountId: account.id }); release.resolve();
+    expect(await refresh).toBe(secrets.access);
+    expect(await h.service.getValidAccessToken(owner.id, account.id)).toBe(secrets.access);
+  });
   it("registers typed providers and refuses unsupported or duplicate providers", () => {
     expect(h.registry.get("google")).toBe(h.provider); expect(h.registry.list()).toHaveLength(1);
     expect(h.registry.isSupported("microsoft")).toBe(false);
@@ -274,13 +348,15 @@ describe.sequential("Integration OAuth foundation", () => {
     await expect(h.start({ connectedAccountId: account.id })).rejects.toMatchObject({ code: "CONNECTION_BUSY" });
     release.resolve(); expect(await disconnect).toMatchObject({ status: "disconnected", revocationFailed: true });
   });
-  it("serializes disconnect during refresh without resurrecting rotated credentials", async () => {
+  it("disconnects before an in-flight refresh finishes and rejects its rotated credential", async () => {
     const { account } = await h.connect(); await h.expire(account.id); const entered = deferred(), release = deferred();
     h.state.refreshHook = async () => { entered.resolve(); await release.promise; }; h.state.refreshRotation = true;
-    const refresh = h.service.getValidAccessToken(owner.id, account.id); await entered.promise;
-    const disconnect = h.service.disconnectConnectedAccount(owner.id, account.id); release.resolve(); await Promise.all([refresh, disconnect]);
+    const refresh = h.service.getValidAccessToken(owner.id, account.id);
+    const rejected = expect(refresh).rejects.toMatchObject({ code: "DISCONNECTED" }); await entered.promise;
+    expect(await h.service.disconnectConnectedAccount(owner.id, account.id)).toMatchObject({ status: "disconnected" });
+    release.resolve(); await rejected;
     expect(await db().connectedAccount.findUnique({ where: { id: account.id } })).toMatchObject({ status: "REVOKED", accessTokenEncrypted: null, refreshTokenEncrypted: null });
-    const revoke = h.http.mock.calls.find(([url]) => String(url).endsWith("/revoke")); expect(String(revoke?.[1]?.body)).toContain(encodeURIComponent(secrets.rotated));
+    const revoke = h.http.mock.calls.find(([url]) => String(url).endsWith("/revoke")); expect(String(revoke?.[1]?.body)).toContain(encodeURIComponent(secrets.refresh));
     await expect(h.service.getValidAccessToken(owner.id, account.id)).rejects.toMatchObject({ code: "DISCONNECTED" });
   });
   it("invalidates pending callbacks when an account is disconnected", async () => {

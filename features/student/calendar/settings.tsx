@@ -1,4 +1,5 @@
 "use client";
+import { INTEGRATION_HEALTH_LABELS } from "@/lib/student/integrations/health";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { request } from "@/lib/student/client";
@@ -57,7 +58,7 @@ export function CalendarSettingsPanel({ account, enable, disabled }: {
       {c.enabledForAvailability && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={c.blockAllDay} onChange={e => check(c.id, "blockAllDay", e.target.checked)}/>Block all-day events</label>}
       {canWrite && c.canWrite && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={c.allowStudyWrites} onChange={e => check(c.id, "allowStudyWrites", e.target.checked)}/>Allow study events in this calendar</label>}
     </fieldset>)}<Button size="sm" disabled={busy} onClick={() => void save()}>Save calendars</Button>
-      <p className="text-xs text-muted-foreground">Sync: {data.sync?.status.toLowerCase() ?? "not started"} · Last success: {data.sync?.lastSuccessfulSyncAt ? new Date(data.sync.lastSuccessfulSyncAt).toLocaleString() : "never"}</p><Button size="sm" variant="ghost" disabled={busy} onClick={() => void load(false)}>Check sync status</Button>
+      <p className="text-xs text-muted-foreground">Sync: {data.health ? INTEGRATION_HEALTH_LABELS[data.health.state] : "Not synced yet"} · Last success: {data.sync?.lastSuccessfulSyncAt ? new Date(data.sync.lastSuccessfulSyncAt).toLocaleString() : "never"}</p><Button size="sm" variant="ghost" disabled={busy} onClick={() => void load(false)}>Check sync status</Button>
     </div>}
     {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}<p role="status" className="mt-2 text-sm">{busy ? "Updating Calendar…" : message}</p>
   </div>;

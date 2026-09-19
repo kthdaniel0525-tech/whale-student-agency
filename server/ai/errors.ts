@@ -1,4 +1,5 @@
 import "server-only";
+import type { AIUsage } from "./types";
 
 const messages = {
   CONFIGURATION:
@@ -19,7 +20,7 @@ const messages = {
 export type AIErrorCode = keyof typeof messages;
 export class AIError extends Error {
   readonly retryable: boolean;
-  constructor(public readonly code: AIErrorCode) {
+  constructor(public readonly code: AIErrorCode, public readonly usage?: AIUsage, public readonly model?: string) {
     super(messages[code]);
     this.name = "AIError";
     this.retryable = code === "RATE_LIMIT" || code === "PROVIDER_FAILURE";

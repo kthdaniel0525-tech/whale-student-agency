@@ -11,6 +11,7 @@ import { IntegrationError, protectIntegration, safeIntegrationError, type Integr
 import { emitIntegrationEvent } from "./events";
 import { integrationRegistry, type IntegrationRegistry } from "./registry";
 import type { IntegrationClient } from "./types";
+import { integrationHealth } from "./health";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("base64url");
 const idSchema = z.string().min(1).max(100);
@@ -34,10 +35,10 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     const account = await tx.connectedAccount.findFirst({ where: { id, userId } });
     if (!account) throw new IntegrationError("NOT_FOUND"); return account;
   }
-  function view(account: ConnectedAccount): ConnectedAccountView {
+  function view(account: ConnectedAccount & { syncStates?: Parameters<typeof integrationHealth>[1] }, capability?: IntegrationCapability): ConnectedAccountView {
     const provider = registry.get(account.provider);
-    return { id: account.id, provider: provider.id, displayName: account.displayName, email: account.email, status: databaseStatus[account.status],
-      capabilities: provider.capabilitiesFor(account.scopes), connectedAt: account.connectedAt.toISOString(), lastRefreshedAt: account.lastRefreshedAt?.toISOString() ?? null,
+    return { id: account.id, provider: provider.id, displayName: account.displayName, email: account.email, status: databaseStatus[account.status], health: integrationHealth({ ...account, deniedCapabilities: account.deniedCapabilities.filter(c => !capability || c === capability) }, account.syncStates?.filter(s => !capability || s.integrationType === capability), now()),
+      capabilities: provider.capabilitiesFor(account.scopes).filter(capability => !account.deniedCapabilities.includes(capability)), connectedAt: account.connectedAt.toISOString(), lastRefreshedAt: account.lastRefreshedAt?.toISOString() ?? null,
       revocationFailed: Boolean(account.revocationErrorCode) };
   }
   function usable(account: ConnectedAccount, capability?: IntegrationCapability, providerId?: IntegrationProviderId) {
@@ -45,14 +46,14 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     if (providerId && provider.id !== providerId) throw new IntegrationError("INVALID_REQUEST");
     if (account.status === "REVOKED") throw new IntegrationError("DISCONNECTED");
     if (account.status === "EXPIRED") throw new IntegrationError("RECONNECT_REQUIRED");
-    if (capability && (!INTEGRATION_CAPABILITIES.includes(capability) || !provider.validateScopes(account.scopes, [capability]))) {
+    if (capability && (!INTEGRATION_CAPABILITIES.includes(capability) || account.deniedCapabilities.includes(capability) || !provider.validateScopes(account.scopes, [capability]))) {
       emitIntegrationEvent("INTEGRATION_SCOPE_REQUIRED", { provider: provider.id, connectedAccountId: account.id, errorCode: "AUTHORIZATION_REQUIRED" });
       throw new IntegrationError("AUTHORIZATION_REQUIRED");
     }
     return provider;
   }
-  const listConnectedAccounts = (userId: string) => protectIntegration(async () => (await db().connectedAccount.findMany({ where: { userId, provider: { in: registry.list().map(provider => provider.id) } }, orderBy: { connectedAt: "desc" } })).map(view));
-  const getConnectedAccount = (userId: string, id: string) => protectIntegration(async () => view(await owned(userId, id)));
+  const listConnectedAccounts = (userId: string) => protectIntegration(async () => (await db().connectedAccount.findMany({ where: { userId, provider: { in: registry.list().map(provider => provider.id) } }, include: { syncStates: true }, orderBy: { connectedAt: "desc" } })).map(account => view(account)));
+  const getConnectedAccount = (userId: string, id: string, capability?: IntegrationCapability) => protectIntegration(async () => view({ ...await owned(userId, id), syncStates: await db().integrationSyncState.findMany({ where: { connectedAccountId: id, connectedAccount: { userId } } }) }, capability));
   const getIntegrationSettings = (userId: string): Promise<IntegrationSettingsView> => protectIntegration(async () => {
     let secureStorageReady = false; try { encryption(); secureStorageReady = true; } catch { /* No secret/config details in the UI. */ }
     return { providers: registry.list().map((provider) => ({ id: provider.id, name: provider.name, available: secureStorageReady && provider.isConfigured() })), accounts: await listConnectedAccounts(userId) };
@@ -126,9 +127,10 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       const data = { displayName: external.displayName, email: external.email, scopes: tokens.scopes!, status: "ACTIVE" as const,
         accessTokenEncrypted: crypto.encrypt(tokens.accessToken, credentialContext(identity.userId, provider.id, id, "access")), refreshTokenEncrypted,
         accessTokenExpiresAt: new Date(now().getTime() + tokens.expiresInSeconds * 1000), revokedAt: null, lastErrorCode: null, refreshRetryAfter: null,
-        revocationErrorCode: null, revocationPendingUntil: null };
+        revocationErrorCode: null, revocationPendingUntil: null, refreshLeaseToken: null, refreshLeaseUntil: null, deniedCapabilities: [] };
       const account = current ? await tx.connectedAccount.update({ where: { id }, data: { ...data, credentialVersion: { increment: 1 } } })
         : await tx.connectedAccount.create({ data: { id, userId: identity.userId, provider: provider.id, providerAccountId: external.id, ...data } });
+      await tx.integrationSyncState.updateMany({ where: { connectedAccountId: id }, data: { retryAfter: null, lastErrorCode: null } });
       await tx.oAuthConnectionSession.update({ where: { id: session.id }, data: { completedAt: now(), resultAccountId: id } });
       return { account, reconnected: Boolean(current) };
     }, transactionOptions);
@@ -136,43 +138,66 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     return { account: view(persisted.account), redirectPath: claim.row.redirectPath, replayed: false };
   });
 
-  /** For trusted server/job callers only. The account lock spans refresh with a
-   * bounded HTTP timeout; other processes re-read the refreshed credentials.
-   * Failure state must commit, so throw the safe error after the transaction. */
+  /** A durable short lease coalesces refresh across workers without holding a DB
+   * lock during HTTP. Disconnect can commit immediately; version + lease checks
+   * prevent a late refresh from resurrecting or overwriting credentials. */
   const getValidAccessToken = (userId: string, connectedAccountId: string, capability?: IntegrationCapability, providerId?: IntegrationProviderId): Promise<string> => protectIntegration(async () => {
-    const outcome = await db().$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${connectedAccountId} AND "userId"=${userId} FOR UPDATE`;
-      const account = await owned(userId, connectedAccountId, tx); const provider = usable(account, capability, providerId); const timestamp = now();
-      if (account.refreshRetryAfter && account.refreshRetryAfter > timestamp) return { error: "PROVIDER_UNAVAILABLE" as IntegrationErrorCode };
-      try {
-        const crypto = encryption();
-        if (account.accessTokenEncrypted && account.accessTokenExpiresAt && account.accessTokenExpiresAt.getTime() > timestamp.getTime() + 60000)
-          return { token: crypto.decrypt(account.accessTokenEncrypted, credentialContext(userId, provider.id, account.id, "access")) };
-        if (!account.refreshTokenEncrypted) {
-          await tx.connectedAccount.update({ where: { id: account.id }, data: { status: "EXPIRED", accessTokenEncrypted: null, lastErrorCode: "RECONNECT_REQUIRED" } });
-          return { error: "RECONNECT_REQUIRED" as IntegrationErrorCode };
+    const deadline = performance.now() + 20000;
+    while (performance.now() < deadline) {
+      const lease = randomUUID();
+      const claim = await db().$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${connectedAccountId} AND "userId"=${userId} FOR UPDATE`;
+        const account = await owned(userId, connectedAccountId, tx); usable(account, capability, providerId);
+        if (account.refreshRetryAfter && account.refreshRetryAfter > now()) return { error: new IntegrationError(account.lastErrorCode === "PROVIDER_RATE_LIMITED" ? "PROVIDER_RATE_LIMITED" : "PROVIDER_UNAVAILABLE", (account.refreshRetryAfter.getTime() - now().getTime()) / 1000) };
+        try {
+          const crypto = encryption();
+          if (account.accessTokenEncrypted && account.accessTokenExpiresAt && account.accessTokenExpiresAt.getTime() > now().getTime() + 60000)
+            return { token: crypto.decrypt(account.accessTokenEncrypted, credentialContext(userId, account.provider, account.id, "access")) };
+          if (account.refreshLeaseUntil && account.refreshLeaseUntil > now()) return { waiting: true };
+          if (!account.refreshTokenEncrypted) throw new IntegrationError("RECONNECT_REQUIRED");
+          const refresh = crypto.decrypt(account.refreshTokenEncrypted, credentialContext(userId, account.provider, account.id, "refresh"));
+          await tx.connectedAccount.update({ where: { id: account.id }, data: { refreshLeaseToken: lease, refreshLeaseUntil: new Date(now().getTime() + 15000) } });
+          return { account, refresh };
+        } catch (cause) {
+          const error = safeIntegrationError(cause);
+          const expired = ["ENCRYPTION_FAILURE", "RECONNECT_REQUIRED"].includes(error.code);
+          await tx.connectedAccount.update({ where: { id: account.id }, data: { status: expired ? "EXPIRED" : "ERROR", ...(expired ? { accessTokenEncrypted: null, refreshTokenEncrypted: null, accessTokenExpiresAt: null } : {}), lastErrorCode: error.code, refreshRetryAfter: expired ? null : new Date(now().getTime() + 60000), refreshLeaseToken: null, refreshLeaseUntil: null } });
+          emitIntegrationEvent("INTEGRATION_TOKEN_REFRESH_FAILED", { provider: registry.get(account.provider).id, connectedAccountId: account.id, errorCode: error.code });
+          return { error };
         }
-        const refresh = crypto.decrypt(account.refreshTokenEncrypted, credentialContext(userId, provider.id, account.id, "refresh"));
-        const tokens = await provider.refreshAccessToken(refresh);
-        await tx.connectedAccount.update({ where: { id: account.id }, data: {
-          accessTokenEncrypted: crypto.encrypt(tokens.accessToken, credentialContext(userId, provider.id, account.id, "access")),
-          ...(tokens.refreshToken ? { refreshTokenEncrypted: crypto.encrypt(tokens.refreshToken, credentialContext(userId, provider.id, account.id, "refresh")) } : {}),
-          accessTokenExpiresAt: new Date(now().getTime() + tokens.expiresInSeconds * 1000),
-          scopes: tokens.scopes ?? account.scopes, status: "ACTIVE", lastRefreshedAt: now(), refreshRetryAfter: null, lastErrorCode: null, credentialVersion: { increment: 1 },
+      }, transactionOptions);
+      if (claim.error) throw claim.error;
+      if (claim.token) return claim.token;
+      if (!claim.account) { await new Promise(resolve => setTimeout(resolve, 100)); continue; }
+      const account = claim.account, provider = registry.get(account.provider);
+      try {
+        const tokens = await provider.refreshAccessToken(claim.refresh);
+        const crypto = encryption();
+        const published = await db().connectedAccount.updateMany({ where: { id: account.id, userId, credentialVersion: account.credentialVersion, refreshLeaseToken: lease, status: { in: ["ACTIVE", "ERROR"] } }, data: {
+          accessTokenEncrypted: crypto.encrypt(tokens.accessToken, credentialContext(userId, account.provider, account.id, "access")),
+          ...(tokens.refreshToken ? { refreshTokenEncrypted: crypto.encrypt(tokens.refreshToken, credentialContext(userId, account.provider, account.id, "refresh")) } : {}),
+          accessTokenExpiresAt: new Date(now().getTime() + tokens.expiresInSeconds * 1000), scopes: tokens.scopes ?? account.scopes,
+          status: "ACTIVE", lastRefreshedAt: now(), refreshRetryAfter: null, lastErrorCode: null, refreshLeaseToken: null, refreshLeaseUntil: null, credentialVersion: { increment: 1 },
         } });
-        if (capability && !provider.validateScopes(tokens.scopes ?? account.scopes, [capability])) return { error: "AUTHORIZATION_REQUIRED" as IntegrationErrorCode };
-        return { token: tokens.accessToken };
+        const current = await owned(userId, account.id); usable(current, capability, providerId);
+        if (published.count) return tokens.accessToken;
+        // A reconnect superseded this refresh. Re-read its credential, never publish the old result.
       } catch (cause) {
-        const error = safeIntegrationError(cause); const expired = ["INVALID_GRANT", "RECONNECT_REQUIRED"].includes(error.code);
-        await tx.connectedAccount.update({ where: { id: account.id }, data: { status: expired ? "EXPIRED" : "ERROR", lastErrorCode: error.code,
+        const error = safeIntegrationError(cause), expired = ["INVALID_GRANT", "RECONNECT_REQUIRED", "ENCRYPTION_FAILURE"].includes(error.code);
+        const changed = await db().connectedAccount.updateMany({ where: { id: account.id, userId, credentialVersion: account.credentialVersion, refreshLeaseToken: lease, status: { in: ["ACTIVE", "ERROR"] } }, data: {
+          status: expired ? "EXPIRED" : "ERROR", lastErrorCode: error.code, refreshLeaseToken: null, refreshLeaseUntil: null,
           ...(expired ? { accessTokenEncrypted: null, refreshTokenEncrypted: null, accessTokenExpiresAt: null } : {}),
-          refreshRetryAfter: expired ? null : new Date(timestamp.getTime() + 60000) } });
-        emitIntegrationEvent("INTEGRATION_TOKEN_REFRESH_FAILED", { provider: provider.id, connectedAccountId: account.id, errorCode: error.code });
-        return { error: (expired ? "RECONNECT_REQUIRED" : error.code) as IntegrationErrorCode };
+          refreshRetryAfter: expired ? null : new Date(now().getTime() + (error.retryAfterSeconds ?? 60) * 1000),
+        } });
+        if (changed.count) {
+          emitIntegrationEvent("INTEGRATION_TOKEN_REFRESH_FAILED", { provider: provider.id, connectedAccountId: account.id, errorCode: error.code });
+          throw new IntegrationError(expired && error.code !== "ENCRYPTION_FAILURE" ? "RECONNECT_REQUIRED" : error.code, error.retryAfterSeconds);
+        }
+        usable(await owned(userId, account.id), capability, providerId);
+        if (error.code === "AUTHORIZATION_REQUIRED") throw error;
       }
-    }, transactionOptions);
-    if (outcome.error) throw new IntegrationError(outcome.error);
-    return outcome.token!;
+    }
+    throw new IntegrationError("CONNECTION_BUSY");
   });
 
   const disconnectConnectedAccount = (userId: string, id: string) => protectIntegration(async () => {
@@ -183,11 +208,13 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       if (account.status === "REVOKED") return { account, changed: false };
       await tx.oAuthConnectionSession.deleteMany({ where: { userId } });
       await tx.connectedAccount.update({ where: { id }, data: { status: "REVOKED", accessTokenEncrypted: null, refreshTokenEncrypted: null,
-        accessTokenExpiresAt: null, revokedAt: now(), lastErrorCode: null, refreshRetryAfter: null, credentialVersion: { increment: 1 },
+        accessTokenExpiresAt: null, revokedAt: now(), lastErrorCode: null, refreshRetryAfter: null, refreshLeaseToken: null, refreshLeaseUntil: null, credentialVersion: { increment: 1 },
         revocationPendingUntil: new Date(now().getTime() + 15000) } });
       await tx.integrationSyncState.updateMany({ where: { connectedAccountId: id }, data: { status: "IDLE", cursorEncrypted: null, leaseToken: null, leaseUntil: null } });
       await tx.externalFileLink.updateMany({ where: { connectedAccountId: id, userId, syncStatus: { in: ["PENDING", "IMPORTING"] } }, data: { syncStatus: "FAILED", errorCode: "DISCONNECTED", leaseToken: null, leaseUntil: null, requestVersion: { increment: 1 } } });
-      await tx.calendarIntegrationPreference.deleteMany({ where: { connectedAccountId: id, userId } });
+      // Retain the user's selection for reconnect; the revoked account gate stops
+      // all access immediately. Erase cached availability and fence active snapshots.
+      await tx.calendarIntegrationPreference.updateMany({ where: { connectedAccountId: id, userId }, data: { busyEvents: [], windowStart: null, windowEnd: null, revision: { increment: 1 } } });
       return { account, changed: true };
     }, transactionOptions);
     if (result.changed) {
@@ -211,30 +238,65 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
   };
   const withProviderClient = <T>(input: { userId: string; connectedAccountId: string; provider: IntegrationProviderId; capability: IntegrationCapability }, operation: (client: IntegrationClient) => Promise<T>): Promise<T> => protectIntegration(async () => {
     usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
+    async function runRequest<R>(send: (token: string) => Promise<R>): Promise<R> {
+      const key = { connectedAccountId: input.connectedAccountId, integrationType: input.capability };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const state = await db().integrationSyncState.findUnique({ where: { connectedAccountId_integrationType: key }, select: { id: true, updatedAt: true, retryAfter: true, lastErrorCode: true, leaseToken: true } });
+        if (state?.retryAfter && state.retryAfter > now()) throw new IntegrationError("PROVIDER_RATE_LIMITED", (state.retryAfter.getTime() - now().getTime()) / 1000);
+        const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
+        const used = await owned(input.userId, input.connectedAccountId);
+        usable(used, input.capability, input.provider);
+        if (!used.accessTokenEncrypted || encryption().decrypt(used.accessTokenEncrypted, credentialContext(input.userId, used.provider, used.id, "access")) !== token) continue;
+        try {
+          const result = await send(token);
+          usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
+          // Provider access does not mean a complete snapshot was synced. Only
+          // the feature's successful commit may advance freshness timestamps.
+          if (state?.lastErrorCode && !state.leaseToken) await db().integrationSyncState.updateMany({ where: { id: state.id, updatedAt: state.updatedAt }, data: { lastErrorCode: null, retryAfter: null } });
+          return result;
+        } catch (cause) {
+          const error = safeIntegrationError(cause);
+          if (!["RECONNECT_REQUIRED", "INVALID_GRANT", "AUTHORIZATION_REQUIRED", "PROVIDER_RATE_LIMITED", "PROVIDER_UNAVAILABLE"].includes(error.code)) throw error;
+          await db().$transaction(async tx => {
+            await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${input.connectedAccountId} AND "userId"=${input.userId} FOR UPDATE`;
+            const account = await owned(input.userId, input.connectedAccountId, tx);
+            if (!["ACTIVE", "ERROR"].includes(account.status) || !account.accessTokenEncrypted || account.credentialVersion !== used.credentialVersion) return;
+            // Ignore stale failures from a token superseded by reconnect/another refresh.
+            if (encryption().decrypt(account.accessTokenEncrypted, credentialContext(input.userId, account.provider, account.id, "access")) !== token) return;
+            if (error.code === "RECONNECT_REQUIRED" || error.code === "INVALID_GRANT") {
+              const expired = attempt > 0 || !account.refreshTokenEncrypted || error.code === "INVALID_GRANT";
+              await tx.connectedAccount.update({ where: { id: account.id }, data: { accessTokenExpiresAt: null,
+                ...(expired ? { status: "EXPIRED", accessTokenEncrypted: null, refreshTokenEncrypted: null, lastErrorCode: "RECONNECT_REQUIRED" } : {}) } });
+            } else {
+              if (error.code === "AUTHORIZATION_REQUIRED") await tx.connectedAccount.update({ where: { id: account.id }, data: { deniedCapabilities: [...new Set([...account.deniedCapabilities, input.capability])], lastErrorCode: error.code } });
+              const data = { lastErrorCode: error.code, ...(error.code === "PROVIDER_RATE_LIMITED" ? { retryAfter: new Date(now().getTime() + error.retryAfterSeconds! * 1000) } : {}) };
+              await tx.integrationSyncState.upsert({ where: { connectedAccountId_integrationType: key }, create: { ...key, ...data, status: "FAILED" }, update: data });
+            }
+          });
+          emitIntegrationEvent("INTEGRATION_PROVIDER_REQUEST_FAILED", { provider: input.provider, connectedAccountId: input.connectedAccountId, errorCode: error.code });
+          // A 401 is safe to retry once. Unknown outcomes of writes are NOT retried here.
+          if (error.code === "RECONNECT_REQUIRED" && attempt === 0) continue;
+          throw error;
+        }
+      }
+      throw new IntegrationError("RECONNECT_REQUIRED");
+    }
     const client: IntegrationClient = { async read(request) {
-      const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
-      const result = await registry.get(input.provider).read({ ...request, capability: input.capability, accessToken: token });
-      // In-flight calls cannot expose results after local disconnect or permission loss.
-      usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
-      return result;
+      return runRequest(token => registry.get(input.provider).read({ ...request, capability: input.capability, accessToken: token }));
     }, async download(request) {
-      const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
       const provider = registry.get(input.provider);
       if (!provider.download) throw new IntegrationError("INVALID_REQUEST");
-      const result = await provider.download({ ...request, capability: input.capability, accessToken: token });
-      usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
-      return result;
+      return runRequest(token => provider.download!({ ...request, capability: input.capability, accessToken: token }));
     }, async write(request) {
       if (input.capability !== "calendar-write") throw new IntegrationError("AUTHORIZATION_REQUIRED");
-      const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
       // Serialize an already-authorized write with disconnect. Once revocation commits,
       // no new network mutation can begin. Feature code never receives the token.
-      return db().$transaction(async (tx) => {
+      return runRequest(token => db().$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${input.connectedAccountId} AND "userId"=${input.userId} FOR UPDATE`;
         const provider = usable(await owned(input.userId, input.connectedAccountId, tx), input.capability, input.provider);
         if (!provider.write) throw new IntegrationError("INVALID_REQUEST");
         return provider.write({ ...request, capability: input.capability, accessToken: token });
-      }, transactionOptions);
+      }, transactionOptions));
     } };
     return operation(client);
   });

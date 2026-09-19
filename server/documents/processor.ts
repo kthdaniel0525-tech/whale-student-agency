@@ -1,4 +1,5 @@
 import "server-only";
+import { withAIUsageContext } from "../ai/usage/context";
 import { randomUUID } from "node:crypto";
 import { db } from "@/server/db/client";
 import { storage } from "./storage/local";
@@ -80,7 +81,8 @@ export async function processNextDocument(
     await Promise.race([
       deadline,
       (async () => {
-        const prepared = await prepareDocument(await storage.get(claim.storageKey), claim.fileType, provider, checkDeadline);
+        const bytes = await storage.get(claim.storageKey);
+        const prepared = await withAIUsageContext({ userId: claim.userId, source: "rag-document" }, () => prepareDocument(bytes, claim.fileType, provider, checkDeadline));
         await db().$transaction(
           async (tx) => {
             const rows = await tx.$queryRaw<

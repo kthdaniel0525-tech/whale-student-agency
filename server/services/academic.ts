@@ -67,7 +67,7 @@ export async function createAssignment(
   input: AssignmentInput,
   transaction?: Prisma.TransactionClient,
 ) {
-  await getCourse(userId, courseId, transaction ?? db());
+  if (!await (transaction ?? db()).course.findUnique({ where: { id_userId: { id: courseId, userId } }, select: { id: true } })) throw new NotFoundError();
   const assignment = await (transaction ?? db()).assignment.create({
     data: {
       ...input,
@@ -115,7 +115,7 @@ export async function createExam(
   input: ExamInput,
   transaction?: Prisma.TransactionClient,
 ) {
-  await getCourse(userId, courseId, transaction ?? db());
+  if (!await (transaction ?? db()).course.findUnique({ where: { id_userId: { id: courseId, userId } }, select: { id: true } })) throw new NotFoundError();
   const exam = await (transaction ?? db()).exam.create({
     data: { ...input, examDate: new Date(input.examDate), userId, courseId },
   });

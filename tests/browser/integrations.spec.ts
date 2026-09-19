@@ -51,7 +51,7 @@ test("integration settings show permissions, connect through state, reconnect, c
     await active.getByRole("button", { name: "Disconnect", exact: true }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog.getByRole("heading", { name: "Disconnect Google?" })).toBeVisible();
-    await expect(dialog).toContainText("will not delete your external calendar");
+    await expect(dialog).toContainText("Your study plans, imported documents and academic data remain available");
     await dialog.getByRole("button", { name: "Keep connected" }).click();
     expect((await pool.query(`SELECT status FROM "ConnectedAccount" WHERE id=$1`, [activeId])).rows[0].status).toBe("ACTIVE");
     await active.getByRole("button", { name: "Disconnect", exact: true }).click();

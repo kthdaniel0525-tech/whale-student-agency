@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { ExternalFileLink, Prisma } from "@/generated/prisma/client";
+import type { ExternalFileLink, Document, Prisma } from "@/generated/prisma/client";
 import { db } from "../db/client";
 import { assertCourse, uploadDocument } from "../documents/service";
 import { DocumentError } from "../documents/config";
@@ -16,7 +16,7 @@ import { googleDriveService, driveDownloadName } from "./google";
 import { driveEvent } from "./events";
 const identity = (input: DriveResource) => ({ connectedAccountId: input.connectedAccountId, externalFileId: input.externalFileId, courseId: input.courseId });
 const key = (input: DriveResource) => ({ connectedAccountId_externalFileId_courseId: identity(input) });
-const active = (link: ExternalFileLink) => link.syncStatus === "PENDING" || (link.syncStatus === "IMPORTING" && (link.leaseUntil?.getTime() ?? 0) > Date.now());
+const active = (link: ExternalFileLink) => (link.syncStatus === "PENDING" && link.updatedAt.getTime() > Date.now() - 15 * 60000) || (link.syncStatus === "IMPORTING" && (link.leaseUntil?.getTime() ?? 0) > Date.now());
 const errorText = (code: string | null) => code === "SOURCE_UNAVAILABLE" ? "The Drive source is unavailable. Your imported copy is preserved." : code === "INVALID_FILE" ? "This file could not be read. Use a valid PDF, TXT, Markdown or Google Doc up to 10 MB." : code ? "Import or refresh failed. Check the connection and try again; any existing copy is preserved." : null;
 async function protect<T>(operation: () => Promise<T>): Promise<T> {
     try {
@@ -45,8 +45,8 @@ async function ownedLink(userId: string, documentId: string) {
         throw new NotFoundError();
     return link;
 }
-async function view(link: ExternalFileLink): Promise<DriveImportView> {
-    const document = link.documentId ? await db().document.findFirst({ where: { id: link.documentId, userId: link.userId }, select: { processingStatus: true, processingError: true } }) : null;
+async function view(link: ExternalFileLink, loaded?: Pick<Document, "processingStatus" | "processingError"> | null): Promise<DriveImportView> {
+    const document = loaded !== undefined ? loaded : link.documentId ? await db().document.findFirst({ where: { id: link.documentId, userId: link.userId }, select: { processingStatus: true, processingError: true } }) : null;
     return { id: link.id, name: link.name, documentId: link.documentId, courseId: link.courseId,
         status: document ? document.processingStatus === "READY" ? "Ready" : document.processingStatus === "FAILED" ? "Failed" : "Processing" : ["FAILED", "UNAVAILABLE"].includes(link.syncStatus) ? "Failed" : "Importing",
         syncStatus: link.syncStatus, error: errorText(link.errorCode) ?? document?.processingError ?? null };
@@ -55,15 +55,15 @@ export async function listDriveImports(userId: string, accountId: string, course
     await getConnectedAccount(userId, accountId); // Local copies/status can still be viewed after disconnect.
     if (courseId)
         await assertCourse(userId, courseId);
-    const links = await db().externalFileLink.findMany({ where: { userId, connectedAccountId: accountId, ...(courseId ? { courseId } : {}) }, orderBy: { createdAt: "desc" }, take: 100 });
-    return Promise.all(links.map(view));
+    const links = await db().externalFileLink.findMany({ where: { userId, connectedAccountId: accountId, ...(courseId ? { courseId } : {}) }, include: { document: { where: { userId }, select: { processingStatus: true, processingError: true } } }, orderBy: { createdAt: "desc" }, take: 100 });
+    return Promise.all(links.map(link => view(link, link.document)));
 }
 export async function getDriveSettings(userId: string, accountId: string): Promise<DriveSettings> {
-    const account = await getConnectedAccount(userId, accountId);
+    const account = await getConnectedAccount(userId, accountId, "drive-read");
     if (account.provider !== "google")
         throw new IntegrationError("INVALID_REQUEST");
     const state = await db().integrationSyncState.findUnique({ where: { connectedAccountId_integrationType: { connectedAccountId: accountId, integrationType: "drive-read" } }, select: { lastSuccessfulSyncAt: true } });
-    return { enabled: account.status !== "disconnected" && account.capabilities.includes("drive-read"), needsReconnect: ["needs-reconnect", "error", "disconnected"].includes(account.status),
+    return { health: account.health, enabled: account.status !== "disconnected" && account.capabilities.includes("drive-read"), needsReconnect: ["needs-reconnect", "disconnected"].includes(account.status),
         importedCount: await db().externalFileLink.count({ where: { userId, connectedAccountId: accountId, documentId: { not: null } } }), lastSuccessfulAccess: state?.lastSuccessfulSyncAt?.toISOString() ?? null };
 }
 export type DriveEnqueue = (tx: Prisma.TransactionClient, link: ExternalFileLink) => Promise<void>;
@@ -113,7 +113,7 @@ export async function checkExternalFileFreshness(userId: string, documentId: str
             return { changed, available: true };
         }
         catch (error) {
-            if (error instanceof IntegrationError && ["RESOURCE_NOT_FOUND", "AUTHORIZATION_REQUIRED"].includes(error.code)) {
+            if (error instanceof IntegrationError && ["RESOURCE_NOT_FOUND", "RESOURCE_ACCESS_DENIED"].includes(error.code)) {
                 await db().externalFileLink.updateMany({ where: { id: link.id, userId, syncStatus: { notIn: ["PENDING", "IMPORTING"] } }, data: { syncStatus: "UNAVAILABLE", errorCode: "SOURCE_UNAVAILABLE", lastCheckedAt: new Date() } });
                 driveEvent("SOURCE_UNAVAILABLE", link.id);
                 return { changed: false, available: false };
@@ -172,13 +172,14 @@ export async function importDriveFile(input: DriveResource & {
         });
         if (!link)
             return { skipped: true, documentId: null };
-        const file = await googleDriveService.metadata(userId, input.connectedAccountId, input.externalFileId);
-        const bytes = await googleDriveService.download(userId, file);
+        check();
+        const file = await googleDriveService.metadata(userId, input.connectedAccountId, input.externalFileId, options.signal);
+        const bytes = await googleDriveService.download(userId, file, options.signal);
         const fileName = driveDownloadName(file);
         validateFile(fileName, bytes);
         check();
         // Metadata after download prevents recording an old timestamp for a newer/mixed source.
-        const after = await googleDriveService.metadata(userId, input.connectedAccountId, input.externalFileId);
+        const after = await googleDriveService.metadata(userId, input.connectedAccountId, input.externalFileId, options.signal);
         if (after.modifiedAt !== file.modifiedAt)
             throw new IntegrationError("PROVIDER_UNAVAILABLE");
         const claimed = link;
@@ -216,7 +217,7 @@ export async function importDriveFile(input: DriveResource & {
     }
     catch (cause) {
         const error = cause instanceof DocumentError ? cause : cause instanceof NotFoundError ? new IntegrationError("NOT_FOUND") : safeIntegrationError(cause);
-        const unavailable = error instanceof IntegrationError && ["RESOURCE_NOT_FOUND", "AUTHORIZATION_REQUIRED"].includes(error.code);
+        const unavailable = error instanceof IntegrationError && ["RESOURCE_NOT_FOUND", "RESOURCE_ACCESS_DENIED"].includes(error.code);
         if (!link) {
             await db().externalFileLink.updateMany({ where: { ...identity(input), userId, syncStatus: "PENDING" }, data: { syncStatus: "FAILED", errorCode: error instanceof IntegrationError ? error.code : "INVALID_FILE", leaseToken: null, leaseUntil: null } });
         }

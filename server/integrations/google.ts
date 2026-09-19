@@ -30,6 +30,17 @@ function rateLimited(body: unknown) {
   const parsed = z.object({ error: z.object({ errors: z.array(z.object({ reason: z.string() })).max(20).optional() }) }).safeParse(body);
   return parsed.success && parsed.data.error.errors?.some(error => ["rateLimitExceeded", "userRateLimitExceeded", "downloadQuotaExceeded"].includes(error.reason));
 }
+function responseFailure(response: Response, body: unknown) {
+  if (response.status === 429 || (response.status === 403 && rateLimited(body))) {
+    const header = response.headers.get("retry-after");
+    const seconds = header && /^\d+$/.test(header) ? Number(header) : header ? (Date.parse(header) - Date.now()) / 1000 : 60;
+    return new IntegrationError("PROVIDER_RATE_LIMITED", seconds);
+  }
+  const parsed = z.object({ error: z.object({ errors: z.array(z.object({ reason: z.string() })).max(20).optional(), details: z.array(z.object({ reason: z.string().optional() })).max(20).optional() }) }).safeParse(body);
+  const missingScope = response.headers.get("www-authenticate")?.includes("insufficient_scope") || parsed.success && [...(parsed.data.error.errors ?? []), ...(parsed.data.error.details ?? [])].some(error => ["insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"].includes(error.reason ?? ""));
+  return new IntegrationError(response.status === 401 ? "RECONNECT_REQUIRED" : response.status === 403 ? missingScope ? "AUTHORIZATION_REQUIRED" : "RESOURCE_ACCESS_DENIED" :
+    response.status === 404 ? "RESOURCE_NOT_FOUND" : response.status === 410 ? "SYNC_TOKEN_EXPIRED" : response.status === 409 ? "RESOURCE_CONFLICT" : "PROVIDER_UNAVAILABLE");
+}
 async function readBounded(response: Response, limit: number, overflow: "INVALID_RESPONSE" | "FILE_TOO_LARGE") {
   if (Number(response.headers.get("content-length")) > limit) { await response.body?.cancel(); throw new IntegrationError(overflow); }
   const reader = response.body?.getReader(), chunks: Uint8Array[] = []; let size = 0;
@@ -69,25 +80,20 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
   }
   private async send(url: string, init: RequestInit, revoke = false): Promise<unknown> {
     try {
-      const response = await this.http(url, { ...init, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) });
+      const response = await this.http(url, { ...init, redirect: "error", cache: "no-store", signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(PROVIDER_TIMEOUT_MS)]) : AbortSignal.timeout(PROVIDER_TIMEOUT_MS) });
       // Read only a bounded response. No response text is included in exceptions.
       const text = (await readBounded(response, 128 * 1024, "INVALID_RESPONSE")).toString("utf8");
       let body: unknown;
-      try { body = text ? JSON.parse(text) : {}; } catch { throw new IntegrationError(response.ok ? "INVALID_RESPONSE" : "PROVIDER_UNAVAILABLE"); }
+      try { body = text ? JSON.parse(text) : {}; } catch { if (response.ok) throw new IntegrationError("INVALID_RESPONSE"); body = {}; }
       const code = body && typeof body === "object" && "error" in body ? body.error : undefined;
       if (revoke && response.status === 400 && code === "invalid_token") return {};
       if (!response.ok) {
         if (code === "invalid_grant") throw new IntegrationError("INVALID_GRANT");
         if (code === "invalid_client" || code === "unauthorized_client") throw new IntegrationError("CONFIGURATION");
-        if (response.status === 404) throw new IntegrationError("RESOURCE_NOT_FOUND");
-        if (response.status === 410) throw new IntegrationError("SYNC_TOKEN_EXPIRED");
-        if (response.status === 409) throw new IntegrationError("RESOURCE_CONFLICT");
-        if (response.status === 401) throw new IntegrationError("RECONNECT_REQUIRED");
-        if (response.status === 403) throw new IntegrationError(rateLimited(body) ? "PROVIDER_UNAVAILABLE" : "AUTHORIZATION_REQUIRED");
-        throw new IntegrationError("PROVIDER_UNAVAILABLE");
+        throw responseFailure(response, body);
       }
       return body;
-    } catch (error) { throw error instanceof IntegrationError ? new IntegrationError(error.code) : new IntegrationError("PROVIDER_UNAVAILABLE"); }
+    } catch (error) { throw error instanceof IntegrationError ? new IntegrationError(error.code, error.retryAfterSeconds) : new IntegrationError("PROVIDER_UNAVAILABLE"); }
   }
   private async tokens(parameters: Record<string, string>, requireScopes: boolean): Promise<IntegrationTokens> {
     const { clientId, clientSecret } = this.credentials();
@@ -123,7 +129,7 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
     return url.toString();
   }
   async read(input: ProviderReadRequest & { accessToken: string }) {
-    return this.send(this.resourceUrl(input), { headers: { Authorization: `Bearer ${input.accessToken}` } });
+    return this.send(this.resourceUrl(input), { signal: input.signal, headers: { Authorization: `Bearer ${input.accessToken}` } });
   }
   async download(input: ProviderDownloadRequest & { accessToken: string }) {
     if (input.capability !== "drive-read" || !/^files\/[A-Za-z0-9_-]+(?:\/export)?$/.test(input.path) ||
@@ -132,14 +138,12 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
       throw new IntegrationError("INVALID_REQUEST");
     try {
       const response = await this.http(this.resourceUrl(input), { headers: { Authorization: `Bearer ${input.accessToken}` },
-        redirect: "error", cache: "no-store", signal: AbortSignal.timeout(60000) });
+        redirect: "error", cache: "no-store", signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
       if (!response.ok) {
-        let limited = false;
-        if (response.status === 403) {
-          const body = await readBounded(response, 16384, "INVALID_RESPONSE");
-          try { limited = Boolean(rateLimited(JSON.parse(body.toString("utf8")))); } catch { /* No raw provider errors leave the adapter. */ }
-        } else await response.body?.cancel();
-        throw new IntegrationError(response.status === 404 ? "RESOURCE_NOT_FOUND" : response.status === 401 ? "RECONNECT_REQUIRED" : response.status === 403 && !limited ? "AUTHORIZATION_REQUIRED" : "PROVIDER_UNAVAILABLE");
+        const bytes = await readBounded(response, 16384, "INVALID_RESPONSE");
+        let body: unknown = {};
+        try { body = JSON.parse(bytes.toString("utf8")); } catch { /* Never retain the upstream text. */ }
+        throw responseFailure(response, body);
       }
       const bytes = await readBounded(response, input.maxBytes, "FILE_TOO_LARGE");
       if (!bytes.length) throw new IntegrationError("INVALID_RESPONSE");
@@ -150,7 +154,7 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
     // This foundation permits only explicit Calendar event mutations, never arbitrary Google writes.
     if (input.capability !== "calendar-write" || !/^calendars\/[^/]+\/events(?:\/[a-v0-9]+)?$/.test(input.path) ||
       !["POST", "PATCH", "DELETE"].includes(input.method)) throw new IntegrationError("INVALID_REQUEST");
-    return this.send(this.resourceUrl(input), { method: input.method,
+    return this.send(this.resourceUrl(input), { method: input.method, signal: input.signal,
       headers: { Authorization: `Bearer ${input.accessToken}`, "Content-Type": "application/json" },
       ...(input.body ? { body: JSON.stringify(input.body) } : {}) });
   }
