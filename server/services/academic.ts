@@ -1,4 +1,5 @@
 import "server-only";
+import type { Prisma } from "@/generated/prisma/client";
 import { cleanupAfterDelete } from "@/server/documents/cleanup";
 import { db } from "@/server/db/client";
 import { getTopRecommendations, refreshRecommendationsBestEffort } from "@/server/recommendations";
@@ -13,8 +14,8 @@ export class NotFoundError extends Error {
     super("This item was not found.");
   }
 }
-export async function getCourse(userId: string, id: string) {
-  const course = await db().course.findUnique({
+export async function getCourse(userId: string, id: string, client: Prisma.TransactionClient = db()) {
+  const course = await client.course.findUnique({
     where: { id_userId: { id, userId } },
     include: {
       assignments: { where: { userId }, orderBy: { dueDate: "asc" } },
@@ -38,8 +39,8 @@ export function listCourses(userId: string) {
     },
   });
 }
-export function createCourse(userId: string, input: CourseInput) {
-  return db().course.create({ data: { ...input, userId } });
+export function createCourse(userId: string, input: CourseInput, client: Prisma.TransactionClient = db()) {
+  return client.course.create({ data: { ...input, userId } });
 }
 export async function updateCourse(
   userId: string,
@@ -64,9 +65,10 @@ export async function createAssignment(
   userId: string,
   courseId: string,
   input: AssignmentInput,
+  transaction?: Prisma.TransactionClient,
 ) {
-  await getCourse(userId, courseId);
-  const assignment = await db().assignment.create({
+  await getCourse(userId, courseId, transaction ?? db());
+  const assignment = await (transaction ?? db()).assignment.create({
     data: {
       ...input,
       dueDate: new Date(input.dueDate),
@@ -75,7 +77,7 @@ export async function createAssignment(
       completedAt: input.status === "COMPLETED" ? new Date() : null,
     },
   });
-  await refreshRecommendationsBestEffort(userId);
+  if (!transaction) await refreshRecommendationsBestEffort(userId);
   return assignment;
 }
 export async function getAssignment(userId: string, id: string) {
@@ -111,12 +113,13 @@ export async function createExam(
   userId: string,
   courseId: string,
   input: ExamInput,
+  transaction?: Prisma.TransactionClient,
 ) {
-  await getCourse(userId, courseId);
-  const exam = await db().exam.create({
+  await getCourse(userId, courseId, transaction ?? db());
+  const exam = await (transaction ?? db()).exam.create({
     data: { ...input, examDate: new Date(input.examDate), userId, courseId },
   });
-  await refreshRecommendationsBestEffort(userId);
+  if (!transaction) await refreshRecommendationsBestEffort(userId);
   return exam;
 }
 export async function getExam(userId: string, id: string) {
@@ -170,4 +173,14 @@ export async function dashboard(userId: string) {
     getTopRecommendations({ userId, limit: 5 }),
   ]);
   return { courses, assignments, exams, recommendations };
+}
+
+/** Only these imported fields belong to the source. Preserve personal effort, priority and completion. */
+export async function updateImportedAssignment(userId: string, id: string, input: Pick<AssignmentInput, "title" | "description" | "dueDate">, tx: Prisma.TransactionClient) {
+  const result = await tx.assignment.updateMany({ where: { id, userId }, data: { ...input, dueDate: new Date(input.dueDate) } });
+  if (!result.count) throw new NotFoundError();
+}
+export async function updateImportedExam(userId: string, id: string, input: Pick<ExamInput, "title" | "examDate">, tx: Prisma.TransactionClient) {
+  const result = await tx.exam.updateMany({ where: { id, userId }, data: { ...input, examDate: new Date(input.examDate) } });
+  if (!result.count) throw new NotFoundError();
 }

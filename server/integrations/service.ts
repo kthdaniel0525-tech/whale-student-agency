@@ -51,7 +51,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     }
     return provider;
   }
-  const listConnectedAccounts = (userId: string) => protectIntegration(async () => (await db().connectedAccount.findMany({ where: { userId }, orderBy: { connectedAt: "desc" } })).map(view));
+  const listConnectedAccounts = (userId: string) => protectIntegration(async () => (await db().connectedAccount.findMany({ where: { userId, provider: { in: registry.list().map(provider => provider.id) } }, orderBy: { connectedAt: "desc" } })).map(view));
   const getConnectedAccount = (userId: string, id: string) => protectIntegration(async () => view(await owned(userId, id)));
   const getIntegrationSettings = (userId: string): Promise<IntegrationSettingsView> => protectIntegration(async () => {
     let secureStorageReady = false; try { encryption(); secureStorageReady = true; } catch { /* No secret/config details in the UI. */ }
@@ -185,7 +185,9 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       await tx.connectedAccount.update({ where: { id }, data: { status: "REVOKED", accessTokenEncrypted: null, refreshTokenEncrypted: null,
         accessTokenExpiresAt: null, revokedAt: now(), lastErrorCode: null, refreshRetryAfter: null, credentialVersion: { increment: 1 },
         revocationPendingUntil: new Date(now().getTime() + 15000) } });
-      await tx.integrationSyncState.updateMany({ where: { connectedAccountId: id }, data: { status: "IDLE", cursorEncrypted: null } });
+      await tx.integrationSyncState.updateMany({ where: { connectedAccountId: id }, data: { status: "IDLE", cursorEncrypted: null, leaseToken: null, leaseUntil: null } });
+      await tx.externalFileLink.updateMany({ where: { connectedAccountId: id, userId, syncStatus: { in: ["PENDING", "IMPORTING"] } }, data: { syncStatus: "FAILED", errorCode: "DISCONNECTED", leaseToken: null, leaseUntil: null, requestVersion: { increment: 1 } } });
+      await tx.calendarIntegrationPreference.deleteMany({ where: { connectedAccountId: id, userId } });
       return { account, changed: true };
     }, transactionOptions);
     if (result.changed) {
@@ -204,6 +206,9 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     return getConnectedAccount(userId, id);
   });
 
+  const assertProviderAccess = async (userId: string, id: string, capability: IntegrationCapability, provider: IntegrationProviderId, tx: Prisma.TransactionClient = db()) => {
+    usable(await owned(userId, id, tx), capability, provider);
+  };
   const withProviderClient = <T>(input: { userId: string; connectedAccountId: string; provider: IntegrationProviderId; capability: IntegrationCapability }, operation: (client: IntegrationClient) => Promise<T>): Promise<T> => protectIntegration(async () => {
     usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
     const client: IntegrationClient = { async read(request) {
@@ -212,6 +217,24 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       // In-flight calls cannot expose results after local disconnect or permission loss.
       usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
       return result;
+    }, async download(request) {
+      const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
+      const provider = registry.get(input.provider);
+      if (!provider.download) throw new IntegrationError("INVALID_REQUEST");
+      const result = await provider.download({ ...request, capability: input.capability, accessToken: token });
+      usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
+      return result;
+    }, async write(request) {
+      if (input.capability !== "calendar-write") throw new IntegrationError("AUTHORIZATION_REQUIRED");
+      const token = await getValidAccessToken(input.userId, input.connectedAccountId, input.capability, input.provider);
+      // Serialize an already-authorized write with disconnect. Once revocation commits,
+      // no new network mutation can begin. Feature code never receives the token.
+      return db().$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${input.connectedAccountId} AND "userId"=${input.userId} FOR UPDATE`;
+        const provider = usable(await owned(input.userId, input.connectedAccountId, tx), input.capability, input.provider);
+        if (!provider.write) throw new IntegrationError("INVALID_REQUEST");
+        return provider.write({ ...request, capability: input.capability, accessToken: token });
+      }, transactionOptions);
     } };
     return operation(client);
   });
@@ -245,7 +268,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     });
   });
   return { startIntegrationConnection, handleIntegrationCallback, listConnectedAccounts, getConnectedAccount, getIntegrationSettings,
-    getValidAccessToken, disconnectConnectedAccount, withProviderClient, getIntegrationSyncState, updateIntegrationSyncState };
+    assertProviderAccess, getValidAccessToken, disconnectConnectedAccount, withProviderClient, getIntegrationSyncState, updateIntegrationSyncState };
 }
 export const { startIntegrationConnection, handleIntegrationCallback, listConnectedAccounts, getConnectedAccount, getIntegrationSettings,
-  getValidAccessToken, disconnectConnectedAccount, withProviderClient, getIntegrationSyncState, updateIntegrationSyncState } = createIntegrationService();
+  assertProviderAccess, getValidAccessToken, disconnectConnectedAccount, withProviderClient, getIntegrationSyncState, updateIntegrationSyncState } = createIntegrationService();

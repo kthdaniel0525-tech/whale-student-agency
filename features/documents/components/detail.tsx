@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { request } from "@/lib/student/client";
+import { DriveSource } from "@/features/student/drive/source";
 import { DocumentActions } from "./actions";
 import { ProcessingStatus } from "./library";
 import type { DocumentItem } from "../types";
@@ -25,7 +26,7 @@ export function DocumentDetail({ initial, initialPage = 1 }: { initial: Document
   const [error, setError] = useState("");
   const [from, setFrom] = useState(1);
   const [busy, setBusy] = useState(false);
-  const openedCitation = useRef(false);
+  const openedCitation = useRef<string | null>(null);
   const reload = useCallback(async () => {
     try {
       setItem(
@@ -60,15 +61,18 @@ export function DocumentDetail({ initial, initialPage = 1 }: { initial: Document
     return () => clearInterval(timer);
   }, [item.processingStatus, reload]);
   useEffect(() => {
-    if (openedCitation.current || item.processingStatus !== "READY") return;
-    openedCitation.current = true;
-    void showPages(Math.min(initialPage, item.pageCount || initialPage));
-  }, [initialPage, item.pageCount, item.processingStatus, showPages]);
+    if (openedCitation.current === item.updatedAt || item.processingStatus !== "READY") return;
+    const page = openedCitation.current ? from : initialPage;
+    openedCitation.current = item.updatedAt;
+    void showPages(Math.min(page, item.pageCount || page));
+  }, [from, initialPage, item.updatedAt, item.pageCount, item.processingStatus, showPages]);
   return (
     <>
       <Link href={item.courseId ? `/student/courses/${item.courseId}` : "/student/documents"} className="text-primary text-sm">
         ← {item.courseId ? `${item.course?.courseCode || "Course"} workspace` : "Document library"}
       </Link>
+      {item.externalFileLink && item.externalFileLink.provider !== "google" && <p className="text-sm text-muted-foreground">Imported course material · {item.externalFileLink.syncStatus === "UNAVAILABLE" ? "Source unavailable; your imported copy is preserved." : item.externalFileLink.syncStatus === "FAILED" ? "Source sync needs attention. Manage it from the course workspace." : "Managed through course sync."}</p>}
+      {item.externalFileLink?.provider === "google" && <DriveSource documentId={item.id} source={item.externalFileLink} onChange={() => void reload()} />}
       <div className="page-heading mt-5">
         <div>
           <p className="eyebrow">

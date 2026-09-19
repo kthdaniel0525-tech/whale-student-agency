@@ -186,6 +186,9 @@ export type AssistantQuizAttempt = {
 };
 
 export type AssistantStudyTask = {
+  scheduledStart?: string | null;
+  scheduledEnd?: string | null;
+  scheduledTimezone?: string | null;
   id: string;
   date: string;
   title: string;

@@ -170,7 +170,7 @@ async function loadDetectionInput(userId: string, now: Date, preferences: Notifi
         tasks: {
           where: { userId },
           select: {
-            id: true, courseId: true, examId: true, title: true, date: true,
+            id: true, courseId: true, examId: true, title: true, date: true, scheduledStart: true,
             durationMinutes: true, priority: true, status: true, updatedAt: true,
           },
           orderBy: [{ date: "asc" }, { priority: "desc" }], take: 200,

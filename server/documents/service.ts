@@ -1,4 +1,5 @@
 import "server-only";
+import type { Prisma } from "@/generated/prisma/client";
 import { randomUUID } from "node:crypto";
 import { db } from "@/server/db/client";
 import { NotFoundError } from "@/server/services/academic";
@@ -23,6 +24,7 @@ export const documentSelect = {
   updatedAt: true,
   course: { select: { id: true, courseCode: true, courseName: true } },
   _count: { select: { chunks: true } },
+  externalFileLink: { select: { provider: true, syncStatus: true, webViewLink: true } },
 } as const;
 export async function getDocument(userId: string, id: string) {
   const document = await db().document.findUnique({
@@ -55,6 +57,7 @@ export async function uploadDocument(
   metadata: unknown,
   fileName: string,
   bytes: Uint8Array,
+  onCreated?: (tx: Prisma.TransactionClient, document: { id: string; userId: string; courseId: string | null }) => Promise<void>,
 ) {
   const input = uploadMetadata.parse(metadata);
   const fileType = validateFile(fileName, bytes);
@@ -84,7 +87,7 @@ export async function uploadDocument(
             409,
           );
         await storage.put(key, bytes);
-        return tx.document.create({
+        const document = await tx.document.create({
           data: {
             ...input,
             userId,
@@ -96,12 +99,15 @@ export async function uploadDocument(
           },
           select: documentSelect,
         });
+        await onCreated?.(tx, { id: document.id, userId, courseId: document.courseId });
+        return document;
       },
       { timeout: 15000 },
     );
     return result;
   } catch (e) {
-    await storage.remove(key).catch(() => {});
+    const referenced = await db().document.findUnique({ where: { storageKey: key }, select: { id: true } }).then(Boolean).catch(() => true);
+    if (!referenced) await storage.remove(key).catch(() => {});
     throw e;
   }
 }

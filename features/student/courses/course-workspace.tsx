@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { AcademicCourseSync } from "@/features/student/academic-integrations/course-status";
 import { DocumentLibrary } from "@/features/documents/components/library";
 import { EntityForm } from "@/features/student/components/entity-form";
 import { CompleteAssignment, DeleteItem } from "@/features/student/components/item-actions";
@@ -143,6 +144,7 @@ export function CourseWorkspace({ initial, initialTab = "overview" }: { initial:
     {error && <div className="course-workspace-error" role="alert"><AlertTriangle /> {error}</div>}
     {data.sectionErrors.length > 0 && <div className="course-workspace-warning" role="status" aria-label={`Unavailable course sections: ${data.sectionErrors.join(", ")}`}>Some course details are temporarily unavailable. Available sections remain current.</div>}
 
+    <AcademicCourseSync courseId={course.id} onSynced={refresh} />
     <nav className="course-tabs" role="tablist" aria-label={`${course.courseCode} workspace sections`} onKeyDown={(event) => {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();

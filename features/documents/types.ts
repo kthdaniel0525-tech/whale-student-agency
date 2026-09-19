@@ -4,6 +4,7 @@ export type CourseOption = {
   courseName: string;
 };
 export type DocumentItem = {
+  externalFileLink?: import("@/lib/student/drive/types").DocumentExternalSource | null;
   id: string;
   title: string;
   originalFileName: string;

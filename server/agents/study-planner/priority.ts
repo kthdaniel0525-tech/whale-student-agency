@@ -1,4 +1,6 @@
 import "server-only";
+import { inferPlanningEndDate } from "../../time/planning-horizon";
+import { constrainPlanningBrief } from "../../calendar/planning";
 import type {
   AssignmentContext,
   ExamContext,
@@ -420,27 +422,6 @@ function sessionPreference(
   return 45;
 }
 
-function inferEndDate(
-  startDate: string,
-  request: string,
-  context: UserContext,
-  explicit?: string,
-): string {
-  if (explicit) return explicit;
-  const lower = request.toLowerCase();
-  if (/\b(?:today|tonight|right now|now)\b/.test(lower)) return startDate;
-  const count = lower.match(/\bnext\s+(\d{1,2})\s+days?\b/);
-  if (count) return addDays(startDate, Math.max(0, Number(count[1]) - 1));
-  if (/\b(?:exam|midterm|final)\b/.test(lower)) {
-    const exam = context.exams
-      ?.filter((item) => item.examDate.slice(0, 10) >= startDate)
-      .sort((a, b) => a.examDate.localeCompare(b.examDate))[0];
-    if (exam) return addDays(exam.examDate.slice(0, 10), -1);
-    const inDays = lower.match(/\bin\s+(\d{1,2})\s+days?\b/);
-    if (inDays) return addDays(startDate, Math.max(0, Number(inDays[1]) - 1));
-  }
-  return addDays(startDate, /\bweek\b/.test(lower) ? 6 : 6);
-}
 
 function availabilityFor(
   startDate: string,
@@ -499,7 +480,7 @@ export function createPlanningBrief(
       ? startDate
       : options.endDate ??
         availabilityDates?.at(-1) ??
-        inferEndDate(startDate, options.request, context);
+        inferPlanningEndDate(startDate, options.request, context);
   if (endDate < startDate) endDate = startDate;
   if (daysBetween(startDate, endDate) > MAXIMUM_HORIZON_DAYS) {
     endDate = addDays(startDate, MAXIMUM_HORIZON_DAYS);
@@ -538,7 +519,7 @@ export function createPlanningBrief(
     startDate,
     totalAvailableMinutes,
   });
-  return {
+  return constrainPlanningBrief({
     mode: options.mode,
     startDate,
     endDate,
@@ -548,5 +529,5 @@ export function createPlanningBrief(
     totalAvailableMinutes,
     assumptions: availabilityResult.assumptions,
     signals: options.mode === "now" ? signals.slice(0, 5) : signals,
-  };
+  }, context.availability, personalization);
 }

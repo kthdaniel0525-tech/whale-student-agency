@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { reminderSourceCurrent } from "@/server/reminders/current";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SendOptions } from "pg-boss";
@@ -267,6 +268,19 @@ describe.sequential("Deadline & Study Reminder Engine", () => {
     const reminder = (await evaluateReminders(owner.id, { now: NOW })).reminders
       .find((item) => item.type === "study-session");
     expect(reminder).toMatchObject({ sourceId: plan.tasks[0].id, scheduledFor: "2026-09-15T13:30:00.000Z" });
+  });
+
+  it("uses an explicit Calendar study time even when the task date is day-only", async () => {
+    const plan = await studyPlanFixture([{ title: "Calendar practice", date: new Date("2026-09-15T00:00:00Z"), priority: 70 }]);
+    await db().studyTask.update({ where: { id: plan.tasks[0].id }, data: { scheduledStart: at(0, 2), scheduledEnd: at(0, 3), scheduledTimezone: "UTC" } });
+    await updateReminderPreferences(owner.id, { leadTimeMinutes: 30 });
+    const reminder = (await evaluateReminders(owner.id, { now: NOW })).reminders.find((item) => item.type === "study-session");
+    expect(reminder).toMatchObject({ sourceId: plan.tasks[0].id, scheduledFor: "2026-09-15T13:30:00.000Z" });
+    const stored = await db().reminder.findFirstOrThrow({ where: { userId: owner.id, sourceId: plan.tasks[0].id, type: "STUDY_SESSION" } });
+    expect(await reminderSourceCurrent(stored, NOW)).toBe(true);
+    await db().studyTask.update({ where: { id: plan.tasks[0].id }, data: { scheduledStart: at(0, 4), scheduledEnd: at(0, 5) } });
+    expect(await reminderSourceCurrent(stored, NOW)).toBe(false);
+
   });
 
   it("creates a reminder for an important missed StudyTask", async () => {

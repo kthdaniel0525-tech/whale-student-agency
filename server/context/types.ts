@@ -7,6 +7,7 @@ import type {
 } from "../memory/types";
 
 export type ContextCategory =
+  | "availability"
   | "profile"
   | "course"
   | "assignments"
@@ -37,6 +38,8 @@ export type MemoryKey =
 export type ContextOptions = Partial<Record<ContextCategory, boolean>> & {
   /** Reserve retrieval slots for every explicitly selected document. */
   selectedDocumentCoverage?: boolean;
+  availabilityExcludePlanId?: string;
+  availabilityWindow?: { startDate?: string; endDate?: string };
   memoryKeys?: MemoryKey[];
   memoryCategories?: MemoryCategory[];
   deadlineWindowDays?: number;
@@ -177,6 +180,7 @@ export interface LearningContextSource {
   }): Promise<LearningContext | undefined>;
 }
 export type ContextData = {
+  availability?: import("@/lib/student/calendar/types").AvailabilityContext;
   career?: CareerContext;
   profile?: ProfileContext;
   course?: CourseContext;

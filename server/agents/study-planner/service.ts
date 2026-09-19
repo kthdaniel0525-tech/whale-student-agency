@@ -1,4 +1,7 @@
 import "server-only";
+import { prepareScheduledTasks, lockAndCheckLocalSchedule } from "../../calendar/planner-persistence";
+import { placeStudyTasks } from "../../calendar/planning";
+import type { Prisma } from "@/generated/prisma/client";
 import { auth } from "../../auth/config";
 import { db } from "../../db/client";
 import { observeStudyTaskOutcome } from "../../memory";
@@ -90,6 +93,7 @@ const planStatusFromDatabase = {
 } as const;
 
 type DatabaseTask = {
+  scheduledStart?: Date | null; scheduledEnd?: Date | null; scheduledTimezone?: string | null;
   id: string;
   date: Date;
   title: string;
@@ -127,6 +131,14 @@ function dateOnly(value: Date | string): string {
 
 function databaseDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function planningCalendarWindow(input: StudyPlanRequest | StudyNowRequest) {
+  const dates = "availability" in input ? input.availability?.map(day => day.date).sort() : undefined;
+  return {
+    startDate: ("startDate" in input ? input.startDate : undefined) ?? dates?.[0],
+    endDate: ("endDate" in input ? input.endDate : undefined) ?? dates?.at(-1),
+  };
 }
 
 function planningDocumentsRequested(
@@ -208,7 +220,7 @@ function validateGeneratedPlan(plan: GeneratedStudyPlan, brief: PlanningBrief): 
 
 function materializedTasks(plan: GeneratedStudyPlan, brief: PlanningBrief) {
   const signals = new Map(brief.signals.map((signal) => [signal.id, signal]));
-  return plan.days.flatMap((day) =>
+  return placeStudyTasks(plan.days.flatMap((day) =>
     day.sessions.map((session) => {
       const signal = signals.get(session.signalId);
       if (!signal) throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
@@ -231,7 +243,7 @@ function materializedTasks(plan: GeneratedStudyPlan, brief: PlanningBrief) {
         sourceConfidenceScore: signal.sourceConfidenceScore,
       };
     }),
-  );
+  ), brief);
 }
 
 function currentPlanSignals(
@@ -277,6 +289,9 @@ function currentPlanSignals(
 function publicTask(task: DatabaseTask): StoredStudyTask {
   return {
     id: task.id,
+    scheduledStart: task.scheduledStart?.toISOString() ?? null,
+    scheduledEnd: task.scheduledEnd?.toISOString() ?? null,
+    scheduledTimezone: task.scheduledTimezone ?? null,
     date: dateOnly(task.date),
     title: task.title,
     courseId: task.courseId,
@@ -330,7 +345,7 @@ function publicPlan(
 }
 
 function directive(brief: PlanningBrief): string {
-  const result = JSON.stringify(brief);
+  const result = JSON.stringify({ ...brief, availability: brief.availability.map(({ date, availableMinutes }) => ({ date, availableMinutes })) });
   if (result.length > 12_000) {
     throw new StudyPlannerAgentError("INVALID_REQUEST");
   }
@@ -376,9 +391,7 @@ export class StudyPlannerAgentService {
         schemaName: "study_plan",
         schema: generatedStudyPlanSchema,
         maxOutputTokens: 4096,
-        ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
-          ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
-          : {}),
+        contextOverrides: { availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
           brief = createPlanningBrief(context, { mode: "create", ...parsed.data }, personalization, adaptiveStrategy);
           if (brief.totalAvailableMinutes < 15) {
@@ -392,17 +405,19 @@ export class StudyPlannerAgentService {
       throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
     }
     validateGeneratedPlan(execution.structuredData, brief);
-    const tasks = materializedTasks(execution.structuredData, brief);
+    const generated = execution.structuredData;
+    const validatedBrief = brief;
+    const tasks = await prepareScheduledTasks(userId, materializedTasks(generated, validatedBrief), validatedBrief);
     try {
-      const saved = await db().studyPlan.create({
+      const savePlan = (transaction: Prisma.TransactionClient) => transaction.studyPlan.create({
         data: {
           userId,
-          title: execution.structuredData.title,
-          startDate: databaseDate(brief.startDate),
-          endDate: databaseDate(brief.endDate),
-          summary: execution.structuredData.summary,
-          assumptions: [...brief.assumptions],
-          totalPlannedMinutes: execution.structuredData.totalPlannedMinutes,
+          title: generated.title,
+          startDate: databaseDate(validatedBrief.startDate),
+          endDate: databaseDate(validatedBrief.endDate),
+          summary: generated.summary,
+          assumptions: [...validatedBrief.assumptions],
+          totalPlannedMinutes: generated.totalPlannedMinutes,
           tasks: {
             // The composite parent relation supplies both studyPlanId and userId.
             create: tasks,
@@ -412,6 +427,13 @@ export class StudyPlannerAgentService {
           tasks: { include: { course: true }, orderBy: [{ date: "asc" }, { priority: "desc" }] },
         },
       });
+      // Preserve the existing atomic nested-create path when no timed schedule is needed.
+      const saved = validatedBrief.calendarTimezone
+        ? await db().$transaction(async (transaction) => {
+            await lockAndCheckLocalSchedule(transaction, userId, tasks);
+            return savePlan(transaction);
+          })
+        : await savePlan(db());
       return publicPlan(saved as DatabasePlan, {
         model: execution.metadata?.model,
         usage: execution.metadata?.usage,
@@ -450,9 +472,7 @@ export class StudyPlannerAgentService {
         schemaName: "study_plan_update",
         schema: generatedStudyPlanSchema,
         maxOutputTokens: 4096,
-        ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
-          ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
-          : {}),
+        contextOverrides: { availabilityExcludePlanId: parsed.data.planId, availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
           const planningContext = retained.length ? { ...context, assignments: context.assignments?.filter((assignment) => !retained.some((task) => task.assignmentId === assignment.id)) } : context;
           const initial = createPlanningBrief(planningContext, { mode: "update", ...parsed.data }, personalization, adaptiveStrategy);
@@ -492,9 +512,10 @@ export class StudyPlannerAgentService {
     const validatedBrief = brief;
     const generated = execution.structuredData;
     validateGeneratedPlan(generated, validatedBrief);
-    const tasks = materializedTasks(generated, validatedBrief);
+    const tasks = await prepareScheduledTasks(userId, materializedTasks(generated, validatedBrief), validatedBrief, existing.id);
     try {
       const saved = await db().$transaction(async (transaction) => {
+        await lockAndCheckLocalSchedule(transaction, userId, tasks, existing.id);
         const stillOwned = await transaction.studyPlan.findFirst({
           where: { id: existing.id, userId },
           select: { id: true },
@@ -578,9 +599,7 @@ export class StudyPlannerAgentService {
         schemaName: "study_now",
         schema: generatedStudyPlanSchema,
         maxOutputTokens: 1536,
-        ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds)
-          ? { contextOverrides: { documents: true, limits: { documents: 5 } } }
-          : {}),
+        contextOverrides: { availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
           const base = createPlanningBrief(context, { mode: "now", ...parsed.data }, personalization, adaptiveStrategy);
           const signals = [

@@ -2,14 +2,12 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { db } from "@/server/db/client";
 import { storage } from "./storage/local";
-import { extractPages } from "./extraction";
-import { chunkPages } from "./chunking";
+import { prepareDocument, publishDocumentIndex } from "./processing";
 import {
   embeddingProvider,
-  validateEmbedding,
   type EmbeddingProvider,
 } from "./embeddings";
-import { DocumentError, MAX_CHUNKS } from "./config";
+import { DocumentError } from "./config";
 import { refreshRecommendationsBestEffort } from "@/server/recommendations";
 type Claim = {
   id: string;
@@ -82,23 +80,7 @@ export async function processNextDocument(
     await Promise.race([
       deadline,
       (async () => {
-        const pages = await extractPages(
-          await storage.get(claim.storageKey),
-          claim.fileType,
-        );
-        checkDeadline();
-        const chunks = chunkPages(pages);
-        if (!chunks.length || chunks.length > MAX_CHUNKS)
-          throw new DocumentError(
-            "This document is empty or too long to index. Split it into smaller files.",
-          );
-        const embeddings: number[][] = [];
-        for (const chunk of chunks) {
-          embeddings.push(
-            validateEmbedding(await provider.generateEmbedding(chunk.content)),
-          );
-          checkDeadline();
-        }
+        const prepared = await prepareDocument(await storage.get(claim.storageKey), claim.fileType, provider, checkDeadline);
         await db().$transaction(
           async (tx) => {
             const rows = await tx.$queryRaw<
@@ -107,40 +89,14 @@ export async function processNextDocument(
             if (!rows.length) return; // Deleted or superseded workers may never publish results.
             checkDeadline();
             const document = rows[0];
-            await tx.documentChunk.deleteMany({
-              where: { documentId: claim.id, userId: claim.userId },
-            });
-            await tx.documentPage.deleteMany({
-              where: { documentId: claim.id, userId: claim.userId },
-            });
-            await tx.documentPage.createMany({
-              data: pages.map((page) => ({
-                ...page,
-                documentId: claim.id,
-                userId: claim.userId,
-              })),
-            });
-            for (const chunk of chunks) {
-              const vector = JSON.stringify(embeddings[chunk.chunkIndex]);
-              const metadata = JSON.stringify({
-                documentTitle: document.title,
-                courseId: document.courseId,
-                chunkIndex: chunk.chunkIndex,
-                pageNumber: chunk.pageNumber,
-                pageEnd: chunk.pageEnd,
-                tokenEstimate: "unicode-characters/4",
-                chunkerVersion: 1,
-              });
-              await tx.$executeRaw`INSERT INTO "DocumentChunk" (id,"documentId","userId","courseId","chunkIndex",content,"pageNumber","pageEnd","tokenCount",embedding,"embeddingModel",metadata)
-          VALUES (${randomUUID()},${claim.id},${claim.userId},${document.courseId},${chunk.chunkIndex},${chunk.content},${chunk.pageNumber},${chunk.pageEnd},${chunk.tokenCount},${vector}::vector,${provider.id},${metadata}::jsonb)`;
-            }
+            await publishDocumentIndex(tx, { ...document, userId: claim.userId }, prepared);
             checkDeadline();
             await tx.document.update({
               where: { id_userId: { id: claim.id, userId: claim.userId } },
               data: {
                 processingStatus: "READY",
                 processingError: null,
-                pageCount: pages.length,
+                pageCount: prepared.pages.length,
                 embeddingModel: provider.id,
                 leaseToken: null,
                 leaseExpiresAt: null,

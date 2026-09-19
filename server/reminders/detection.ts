@@ -186,8 +186,9 @@ function studyCandidates(input: ReminderDetectionInput): ReminderCandidate[] {
     let missedImportant = 0;
     let remaining = 0;
     for (const task of plan.tasks) {
+      const sessionDate = task.scheduledStart ?? task.date;
       if (["PLANNED", "IN_PROGRESS"].includes(task.status)) remaining++;
-      const days = calendarDayDifference(task.date, input.now, input.timezone);
+      const days = calendarDayDifference(sessionDate, input.now, input.timezone);
       const linkedExamDays = task.examId && examDates.get(task.examId)
         ? calendarDayDifference(examDates.get(task.examId)!, input.now, input.timezone)
         : null;
@@ -216,13 +217,13 @@ function studyCandidates(input: ReminderDetectionInput): ReminderCandidate[] {
         });
         continue;
       }
-      const untilTaskMs = task.date.getTime() - input.now.getTime();
-      if (!["PLANNED", "IN_PROGRESS"].includes(task.status) || isUtcDateOnly(task.date) ||
+      const untilTaskMs = sessionDate.getTime() - input.now.getTime();
+      if (!["PLANNED", "IN_PROGRESS"].includes(task.status) || (!task.scheduledStart && isUtcDateOnly(sessionDate)) ||
         untilTaskMs <= 0 || untilTaskMs > REMINDER_CONFIG.studySessionLookaheadHours * HOUR) continue;
-      const reminderTime = new Date(task.date.getTime() - input.leadTimeMinutes * 60_000);
+      const reminderTime = new Date(sessionDate.getTime() - input.leadTimeMinutes * 60_000);
       const time = new Intl.DateTimeFormat("en", {
         timeZone: input.timezone, hour: "numeric", minute: "2-digit",
-      }).format(task.date);
+      }).format(sessionDate);
       result.push({
         type: "study-session",
         title: `Study session at ${time}`,
@@ -230,16 +231,16 @@ function studyCandidates(input: ReminderDetectionInput): ReminderCandidate[] {
         sourceType: "study-task",
         sourceId: task.id,
         scheduledFor: reminderTime < input.now ? input.now : reminderTime,
-        expiresAt: new Date(task.date.getTime() + Math.max(HOUR, task.durationMinutes * 60_000)),
+        expiresAt: new Date(sessionDate.getTime() + Math.max(HOUR, task.durationMinutes * 60_000)),
         prioritySignals: { urgency: 24, academicImpact: 15, sourcePriority: Math.round(task.priority / 8) },
         reasonCode: "STUDY_SESSION_STARTING_SOON",
         reasonData: { leadTimeMinutes: input.leadTimeMinutes, taskPriority: task.priority },
         actionTargetType: "resource",
         actionTargetId: "study-task",
         actionPayload: { studyPlanId: plan.id, studyTaskId: task.id },
-        dedupeKey: `study-session:${task.id}:${task.date.toISOString()}:${input.leadTimeMinutes}`,
+        dedupeKey: `study-session:${task.id}:${sessionDate.toISOString()}:${input.leadTimeMinutes}`,
         supersessionKey: `study-task:${task.id}`,
-        stateFingerprint: `session:${task.date.toISOString()}:${input.leadTimeMinutes}`,
+        stateFingerprint: `session:${sessionDate.toISOString()}:${input.leadTimeMinutes}`,
       });
     }
     const endedBehind = plan.endDate < input.now && remaining > 0;

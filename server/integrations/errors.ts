@@ -1,5 +1,13 @@
 import "server-only";
 export const INTEGRATION_ERROR_MESSAGES = {
+  FILE_TOO_LARGE: "Files must be 10 MB or smaller.",
+  RESOURCE_NOT_FOUND: "This external resource is no longer available.",
+  SYNC_TOKEN_EXPIRED: "Calendar synchronization needs a fresh read.",
+  RESOURCE_CONFLICT: "This calendar event already exists.",
+  CALENDAR_CONFLICT: "This time is busy or outside your study hours. Choose another time.",
+  CALENDAR_LIMIT: "This calendar has too much data for a safe bounded read. Select fewer calendars or try again later.",
+  CALENDAR_UNAVAILABLE: "Calendar availability could not be checked. Refresh Calendar and try again.",
+  TASK_NOT_SCHEDULED: "Choose a study session time before adding it to Calendar.",
   UNAUTHENTICATED: "Sign in again before connecting an account.",
   NOT_FOUND: "This connected account is not available.",
   INVALID_REQUEST: "Check the connection request and try again.",

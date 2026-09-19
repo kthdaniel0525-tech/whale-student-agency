@@ -18,7 +18,7 @@ export class ContextReadCache {
     const key = JSON.stringify(category === "profile" ? { userId } : category === "course" ? { userId, courseId: input.courseId } : category === "learning"
       ? { ...scope, limit: o.limits.learning, names: args.examTopicNames ?? [] }
       : category === "memories" ? { userId, request: input.request, categories: o.memoryCategories, keys: o.memoryKeys, limit: o.limits.memories }
-      : { ...scope, options: o, ...(category === "documents" ? { request: input.request, documentIds: input.documentIds } : {}) });
+      : { ...scope, options: o, ...(["documents", "availability"].includes(category) ? { request: input.request, documentIds: input.documentIds } : {}) });
     this.entries = this.entries.filter((entry) => entry.expires > Date.now());
     let existing = this.entries.find((entry) => entry.category === category && entry.key === key);
     if (!existing && category === "learning" && !args.examTopicNames?.length) {

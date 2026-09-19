@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/features/student/components/empty-state";
 import { request } from "@/lib/student/client";
+import { DriveBrowser } from "@/features/student/drive/browser";
 import { UploadDialog } from "./upload-dialog";
 import { DocumentActions } from "./actions";
 import type { CourseOption, DocumentItem } from "../types";
@@ -128,6 +129,7 @@ export function DocumentLibrary({
             </NativeSelect>
           </div>
         )}
+        <DriveBrowser courses={courses} courseId={courseId || selected || undefined} onImported={() => void reload()} />
         <UploadDialog
           courses={courses}
           courseId={courseId}
@@ -171,7 +173,7 @@ export function DocumentLibrary({
                     {d.title}
                   </Link>
                   <p className="muted text-sm mt-1">
-                    {category(d)} · {d.course?.courseCode || "General material"} · {d.fileType}{" "}
+                    {d.externalFileLink?.provider === "google" ? "Google Drive · " : ""}{category(d)} · {d.course?.courseCode || "General material"} · {d.fileType}{" "}
                     · {Math.ceil(d.fileSize / 1024)} KB{d.pageCount ? ` · ${d.pageCount} pages` : ""} ·{" "}
                     {new Date(d.createdAt).toLocaleDateString("en")}
                   </p>

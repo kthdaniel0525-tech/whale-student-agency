@@ -21,10 +21,15 @@ export async function reminderSourceCurrent(row: Reminder, now: Date): Promise<b
     case "ASSIGNMENT": return Boolean(await db().assignment.findFirst({ where: { ...where, status: { not: "COMPLETED" } } }));
     case "EXAM": return examCurrent(row.sourceId);
     case "STUDY_PLAN": return Boolean(await db().studyPlan.findFirst({ where: { ...where, status: "ACTIVE" } }));
-    case "STUDY_TASK": return Boolean(await db().studyTask.findFirst({ where: { ...where,
+    case "STUDY_TASK": {
+      const task = await db().studyTask.findFirst({ where: { ...where,
       status: { in: row.type === "MISSED_STUDY_TASK" ? ["PLANNED", "IN_PROGRESS", "SKIPPED"] : ["PLANNED", "IN_PROGRESS"] },
       studyPlan: { userId: row.userId, status: "ACTIVE" },
-    } }));
+    } });
+      if (!task) return false;
+      if (row.type === "STUDY_SESSION" && !row.stateFingerprint.startsWith(`session:${(task.scheduledStart ?? task.date).toISOString()}:`)) return false;
+      return true;
+    }
     case "WORKFLOW_RUN": return Boolean(await db().workflowRun.findFirst({ where: { ...where, status: "WAITING_FOR_INPUT" } }));
     case "LEARNING_TOPIC": {
       const topic = await db().learningTopic.findFirst({ where, include: { progress: true } });

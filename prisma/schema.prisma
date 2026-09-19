@@ -165,8 +165,16 @@ model User {
   notifications        Notification[]
   reminderPreference   ReminderPreference?
   jobRuns              JobRun[]
+  calendarPreferences  CalendarIntegrationPreference[]
+  externalEventLinks   ExternalEventLink[]
   connectedAccounts    ConnectedAccount[]
   oauthConnectionSessions OAuthConnectionSession[]
+  externalFileLinks ExternalFileLink[]
+
+  externalCourseLinks ExternalCourseLink[]
+  externalAssignmentLinks ExternalAssignmentLink[]
+  externalExamLinks ExternalExamLink[]
+
 }
 
 enum JobRunStatus {
@@ -431,6 +439,10 @@ model Course {
 
   @@unique([id, userId])
   @@index([userId, semester])
+  externalFileLinks ExternalFileLink[]
+
+  externalCourseLink ExternalCourseLink?
+
 }
 
 model Conversation {
@@ -964,6 +976,10 @@ model StudyTask {
   priority              Int
   status                StudyTaskStatus   @default(PLANNED)
   reason                String
+  scheduledStart        DateTime?
+  scheduledEnd          DateTime?
+  scheduledTimezone     String?
+  externalEventLinks    ExternalEventLink[]
   sourceDueDate         DateTime?
   sourceMasteryScore    Float?
   sourceConfidenceScore Float?
@@ -976,6 +992,8 @@ model StudyTask {
   exam                  Exam?             @relation(fields: [examId], references: [id], onDelete: SetNull)
   assignment            Assignment?       @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
 
+  @@unique([id, userId])
+  @@index([userId, scheduledStart, scheduledEnd])
   @@index([studyPlanId, userId, date, status])
   @@index([userId, date, status])
   @@index([courseId, date])
@@ -1004,6 +1022,10 @@ model Assignment {
   @@index([userId, status, dueDate])
   @@index([courseId, userId])
   @@index([userId, courseId, dueDate])
+  externalAssignmentLink ExternalAssignmentLink?
+
+  @@unique([id, userId])
+
 }
 
 model Exam {
@@ -1023,6 +1045,10 @@ model Exam {
   @@index([userId, examDate])
   @@index([courseId, userId])
   @@index([userId, courseId, examDate])
+  externalExamLink ExternalExamLink?
+
+  @@unique([id, userId])
+
 }
 
 model UserMemory {
@@ -1103,6 +1129,8 @@ model Document {
   @@unique([id, userId])
   @@index([userId, courseId, createdAt])
   @@index([processingStatus, leaseExpiresAt])
+  externalFileLink ExternalFileLink?
+
 }
 
 model DocumentChunk {
@@ -1193,9 +1221,18 @@ model ConnectedAccount {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
   syncStates               IntegrationSyncState[]
+  calendarPreferences      CalendarIntegrationPreference[]
+  externalEventLinks       ExternalEventLink[]
+
+  @@unique([id, userId])
 
   @@unique([userId, provider, providerAccountId])
   @@index([userId, status])
+  externalFileLinks ExternalFileLink[]
+
+  connectionConfig Json?
+  externalCourseLinks ExternalCourseLink[]
+
 }
 
 model OAuthConnectionSession {
@@ -1225,6 +1262,8 @@ model IntegrationSyncState {
   connectedAccount         ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
   integrationType          String
   cursorEncrypted          String?
+  leaseToken               String?
+  leaseUntil               DateTime?
   lastSyncStartedAt        DateTime?
   lastSyncCompletedAt      DateTime?
   lastSuccessfulSyncAt     DateTime?
@@ -1234,4 +1273,155 @@ model IntegrationSyncState {
   updatedAt                DateTime @updatedAt
 
   @@unique([connectedAccountId, integrationType])
+}
+
+// A bounded availability cache, never a copy of calendar descriptions or attendees.
+model CalendarIntegrationPreference {
+  id                     String @id @default(cuid())
+  userId                 String
+  connectedAccountId     String
+  externalCalendarId     String
+  title                  String
+  timezone               String
+  enabledForAvailability Boolean @default(false)
+  allowStudyWrites       Boolean @default(false)
+  blockAllDay            Boolean @default(false)
+  busyEvents             Json @default("[]")
+  windowStart            DateTime?
+  windowEnd              DateTime?
+  revision               Int @default(1)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  user                   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount       ConnectedAccount @relation(fields: [connectedAccountId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@unique([connectedAccountId, externalCalendarId])
+  @@index([userId, enabledForAvailability])
+}
+
+model ExternalEventLink {
+  id                     String @id @default(cuid())
+  userId                 String
+  provider               String @default("google")
+  connectedAccountId     String
+  externalCalendarId     String
+  externalEventId        String
+  studyTaskId            String
+  status                 String @default("PENDING")
+  syncedStart            DateTime?
+  syncedEnd              DateTime?
+  taskRevision           DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  user                   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount       ConnectedAccount @relation(fields: [connectedAccountId, userId], references: [id, userId], onDelete: Cascade)
+  studyTask              StudyTask @relation(fields: [studyTaskId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@unique([studyTaskId, connectedAccountId, externalCalendarId])
+  @@unique([connectedAccountId, externalCalendarId, externalEventId])
+  @@index([userId, studyTaskId])
+}
+
+// Imported copies remain usable independently of the external source grant.
+model ExternalFileLink {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  documentId String? @unique
+  provider String
+  connectedAccountId String
+  externalFileId String
+  name String
+  externalMimeType String
+  externalModifiedAt DateTime?
+  importedAt DateTime?
+  lastCheckedAt DateTime?
+  webViewLink String?
+  syncStatus String @default("PENDING")
+  errorCode String?
+  requestVersion Int @default(1)
+  leaseToken String?
+  leaseUntil DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
+  document Document? @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade)
+  connectedAccount ConnectedAccount @relation(fields: [connectedAccountId, userId], references: [id, userId], onDelete: Cascade)
+  @@unique([connectedAccountId, externalFileId, courseId])
+  @@unique([documentId, userId])
+  @@index([userId, courseId, createdAt])
+  @@index([syncStatus, leaseUntil])
+  externalCourseLinkId String?
+  externalCourseLink ExternalCourseLink? @relation(fields: [externalCourseLinkId, userId], references: [id, userId], onDelete: Cascade)
+  @@index([externalCourseLinkId])
+
+}
+
+model ExternalCourseLink {
+  id String @id @default(cuid())
+  userId String
+  connectedAccountId String
+  provider String
+  externalId String
+  courseId String @unique
+  options Json
+  active Boolean @default(true)
+  requestVersion Int @default(1)
+  requestQueuedAt DateTime?
+  nextSyncAt DateTime @default(now())
+  filesLastSyncedAt DateTime?
+  filesRequested Boolean @default(true)
+  externalEndsAt DateTime?
+  lastResult Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount ConnectedAccount @relation(fields: [connectedAccountId, userId], references: [id, userId], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: Cascade)
+  assignments ExternalAssignmentLink[]
+  exams ExternalExamLink[]
+  files ExternalFileLink[]
+  @@unique([id, userId])
+  @@unique([connectedAccountId, externalId])
+  @@index([active, nextSyncAt])
+  @@index([userId])
+  @@unique([courseId, userId])
+
+}
+model ExternalAssignmentLink {
+  id String @id @default(cuid())
+  userId String
+  externalCourseLinkId String
+  externalId String
+  assignmentId String @unique
+  lastExternalUpdatedAt DateTime?
+  lastSyncedAt DateTime @default(now())
+  externalUrl String?
+  syncStatus String @default("SYNCED")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseLink ExternalCourseLink @relation(fields: [externalCourseLinkId, userId], references: [id, userId], onDelete: Cascade)
+  assignment Assignment @relation(fields: [assignmentId, userId], references: [id, userId], onDelete: Cascade)
+  @@unique([externalCourseLinkId, externalId])
+  @@index([userId])
+  @@unique([assignmentId, userId])
+
+}
+model ExternalExamLink {
+  id String @id @default(cuid())
+  userId String
+  externalCourseLinkId String
+  externalId String
+  examId String @unique
+  lastExternalUpdatedAt DateTime?
+  lastSyncedAt DateTime @default(now())
+  externalUrl String?
+  syncStatus String @default("SYNCED")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseLink ExternalCourseLink @relation(fields: [externalCourseLinkId, userId], references: [id, userId], onDelete: Cascade)
+  exam Exam @relation(fields: [examId, userId], references: [id, userId], onDelete: Cascade)
+  @@unique([externalCourseLinkId, externalId])
+  @@index([userId])
+  @@unique([examId, userId])
+
 }

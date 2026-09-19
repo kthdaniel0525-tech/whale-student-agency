@@ -13,7 +13,7 @@ test("integration settings show permissions, connect through state, reconnect, c
     expect(signup.ok()).toBe(true); userId = (await signup.json()).user.id;
     expect((await page.request.put("/api/student/profile", { headers, data: { name: "Integration Student", school: "Test", program: "CS", currentYear: 1, semester: "Fall", academicGoal: "Learn", studySessionMinutes: 45, explanationDifficulty: "INTERMEDIATE", timezone: "UTC" } })).ok()).toBe(true);
     const activeId = randomUUID(), expiredId = randomUUID();
-    const scopes = ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/calendar.events.readonly"];
+    const scopes = ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/calendar.events.readonly", "https://www.googleapis.com/auth/calendar.calendarlist.readonly"];
     for (const [id, email, status] of [[activeId, "personal@example.test", "ACTIVE"], [expiredId, "university@example.test", "EXPIRED"]]) {
       await pool.query(`INSERT INTO "ConnectedAccount" (id,"userId",provider,"providerAccountId",email,status,scopes,"updatedAt") VALUES ($1,$2,'google',$1,$3,$4::"ConnectedAccountStatus",$5,NOW())`, [id,userId,email,status,scopes]);
     }

@@ -106,6 +106,7 @@ export interface ReminderDetectionInput {
       examId: string | null;
       title: string;
       date: Date;
+      scheduledStart?: Date | null;
       durationMinutes: number;
       priority: number;
       status: "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "SKIPPED";

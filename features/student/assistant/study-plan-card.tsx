@@ -1,5 +1,6 @@
 "use client";
 
+import { CalendarTaskActions } from "@/features/student/calendar/task-actions";
 import { useState } from "react";
 import { CalendarDays, Check, Clock3, Loader2, Play, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,8 @@ export function StudyPlanCard({
                       <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => updateTask(task.id, "skipped")}><SkipForward /> Skip</Button>
                     </div>
                   )}
+                  {task.scheduledStart && <p className="mt-2 text-xs muted">{new Date(task.scheduledStart).toLocaleTimeString(undefined, { timeZone: task.scheduledTimezone ?? "UTC", hour: "2-digit", minute: "2-digit" })} · {task.scheduledTimezone ?? "UTC"}</p>}
+                  {task.id && <CalendarTaskActions taskId={task.id} date={task.date ?? day.date} title={task.title} />}
                   {task.status === "completed" && <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">Completed</p>}
                   {task.status === "skipped" && <p className="mt-2 text-sm muted">Skipped</p>}
                 </div>

@@ -1,4 +1,5 @@
 import "server-only";
+import { availabilityContext } from "./availability";
 import { auth } from "@/server/auth/config";
 import { assertCourse, getDocument } from "@/server/documents/service";
 import { getAssignment, getExam, NotFoundError } from "@/server/services/academic";
@@ -24,6 +25,7 @@ import type {
 } from "./types";
 
 const categories: ContextCategory[] = [
+  "availability",
   "profile",
   "course",
   "career",
@@ -93,6 +95,10 @@ export async function buildUserContext(
   });
   // Only selected loaders execute. Adding a category does not alter the other loaders.
   const loaders: Record<ContextCategory, () => Promise<void>> = {
+    availability: async () => {
+      data.availability = await availabilityContext(args("availability"), data);
+      if (["unavailable", "partial"].includes(data.availability.status)) unavailable.push("availability");
+    },
     career: async () => {
       data.career = await careerContext(args("career"));
       if (data.career.limitations.length) truncated.add("career");
@@ -145,7 +151,7 @@ export async function buildUserContext(
     // Profile establishes semester/timezone; deadlines establish exact readiness topics.
     await loaders.profile();
     const prerequisites = new Set([...requested, "assignments", "exams"] as ContextCategory[]);
-    await Promise.all([...prerequisites].filter((category) => !["profile", "learning", "academicOverview"].includes(category)).map((category) => loaders[category]()));
+    await Promise.all([...prerequisites].filter((category) => !["profile", "learning", "academicOverview", "availability"].includes(category)).map((category) => loaders[category]()));
     await loaders.learning();
     await loaders.academicOverview();
     if (data.learning) delete data.learning.examTopics;
@@ -153,8 +159,9 @@ export async function buildUserContext(
       if (!input.options[category]) delete data[category];
     }
   } else {
-    await Promise.all(requested.map((category) => loaders[category]()));
+    await Promise.all(requested.filter(category => category !== "availability").map((category) => loaders[category]()));
   }
+  if (input.options.availability) await loaders.availability();
   const size = () => JSON.stringify(data).length;
   // Deterministic budget: keep profile/course first, then nearest deadlines and highest-ranked passages.
   for (const category of [...categories].reverse()) {

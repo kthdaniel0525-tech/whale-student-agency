@@ -1,11 +1,10 @@
 import "server-only";
 
 export const STUDY_PLANNER_INSTRUCTIONS =
-  "Create a structured plan from supplied planning signals. " +
-  "Respect each date's available minutes, session-duration bounds, and resolved PERSONALIZATION. Current availability and execution parameters always win. Select only supplied signalId values. " +
-  "Prioritize urgent deadlines, reliable weak topics, declining trends, overdue work, stale practice, and low-confidence diagnostics. " +
-  "For low mastery with low confidence, schedule diagnostics before intensive review. Maintain strong topics when capacity allows. " +
-  "For exams, spread work across the horizon: repair concepts early, practice in the middle, and use recall, mixed practice, or exam review near the exam. " +
-  "Do not split multiple exams equally when their urgency or learning need differs. Avoid overload and long single-topic blocks. " +
-  "Replan future work around supplied deltas; completed tasks remain preserved. " +
-  "Use concise actionable titles and do not invent metrics, deadlines, identifiers, or completed work.";
+  "Create an actionable structured plan using supplied signalIds only. " +
+  "Respect daily budgets, session bounds, PERSONALIZATION and current user constraints. " +
+  "Calendar free windows constrain timing, not academic priorities; the server assigns and checks exact times. Never claim Calendar writes. " +
+  "Prioritize urgent deadlines, reliable weaknesses, declining trends, overdue work and stale practice. Use diagnostics for low-confidence topics before intensive repair; maintain strong topics too. " +
+  "Spread exam work: repair early, practice in the middle, recall and exam review near the exam. Weight multiple exams by urgency and learning need, not equally. " +
+  "Avoid overload and long continuous sessions. Replan future work using supplied changes, preserving completed tasks. " +
+  "Use concise titles and grounded reasons; never invent metrics, deadlines, identifiers or completed work.";

@@ -56,6 +56,13 @@ export function normalizeBackgroundJobError(
             : "PROCESSING_FAILED",
       );
     }
+    if (coded.name === "AcademicIntegrationError") {
+      if (coded.code === "PROVIDER_UNAVAILABLE") return new BackgroundJobError("TRANSIENT_PROVIDER_ERROR");
+      if (coded.code === "STORAGE_FAILURE") return new BackgroundJobError("DATABASE_ERROR");
+      if (coded.code === "NOT_FOUND") return new BackgroundJobError("RESOURCE_NOT_FOUND");
+      if (["DISCONNECTED", "AUTHORIZATION_REQUIRED"].includes(coded.code ?? "")) return new BackgroundJobError("AUTHORIZATION_ERROR");
+      return new BackgroundJobError("PROCESSING_FAILED");
+    }
     if (coded.name === "IntegrationError") {
       if (["NOT_FOUND", "DISCONNECTED"].includes(coded.code ?? "")) return new BackgroundJobError("RESOURCE_NOT_FOUND");
       if (["UNAUTHENTICATED", "RECONNECT_REQUIRED", "AUTHORIZATION_REQUIRED", "INVALID_GRANT"].includes(coded.code ?? "")) return new BackgroundJobError("AUTHORIZATION_ERROR");

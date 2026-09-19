@@ -30,6 +30,7 @@ export type PlanningSignalKind = "topic" | "exam" | "assignment" | "general";
 export interface StudyAvailability {
   readonly date: string;
   readonly availableMinutes: number;
+  readonly freeWindows?: readonly import("@/lib/student/calendar/types").TimeWindow[];
 }
 
 export interface StudyPlanRequest {
@@ -115,6 +116,7 @@ export interface PlanningChanges {
 }
 
 export interface PlanningBrief {
+  readonly calendarTimezone?: string;
   readonly mode: "create" | "update" | "now";
   readonly startDate: string;
   readonly endDate: string;
@@ -148,6 +150,9 @@ export interface PlanningSignalInput {
 }
 
 export interface StoredStudyTask {
+  readonly scheduledStart?: string | null;
+  readonly scheduledEnd?: string | null;
+  readonly scheduledTimezone?: string | null;
   readonly id: string;
   readonly date: string;
   readonly title: string;

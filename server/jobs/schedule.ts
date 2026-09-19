@@ -64,3 +64,24 @@ export async function registerOAuthCleanupSchedule(boss: ScheduleBoundary, overr
   });
   return true;
 }
+
+export async function registerCalendarSyncSchedule(boss: ScheduleBoundary, overrides: { enabled?: boolean } = {}) {
+  const config = getBackgroundJobConfig();
+  if (!(overrides.enabled ?? config.scheduleEnabled)) return false;
+  const { scheduleGoogleCalendarSyncJob } = await import("./sync-google-calendar");
+  const { CALENDAR_CONFIG } = await import("../calendar/config");
+  await boss.schedule(scheduleGoogleCalendarSyncJob.name, CALENDAR_CONFIG.pollCron, { version: 1 }, {
+    key: "calendar-sync-sweep", tz: "UTC", missed: "once", group: { id: "calendar-sync-sweep" },
+    retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: 120, deadLetter: config.deadLetterQueue,
+  });
+  return true;
+}
+
+export async function registerAcademicSyncSchedule(boss: ScheduleBoundary, overrides: { enabled?: boolean } = {}) {
+  const config = getBackgroundJobConfig();
+  if (!(overrides.enabled ?? config.scheduleEnabled)) return false;
+  const { academicSyncConfig } = await import("../academic-integrations/config");
+  const { scheduleExternalCourseSyncJob } = await import("./sync-external-course");
+  await boss.schedule(scheduleExternalCourseSyncJob.name, academicSyncConfig().cron, { version: 1 }, { key: "academic-sync-sweep", tz: "UTC", missed: "once", group: { id: "academic-sync-sweep" }, retryLimit: 2, retryDelay: 60, expireInSeconds: 120, deadLetter: config.deadLetterQueue });
+  return true;
+}

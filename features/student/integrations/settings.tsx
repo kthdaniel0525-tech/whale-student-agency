@@ -1,4 +1,8 @@
 "use client";
+import { DriveSettingsPanel } from "@/features/student/drive/settings";
+import { AcademicIntegrationSettings } from "@/features/student/academic-integrations/settings";
+import { CalendarSettingsPanel } from "@/features/student/calendar/settings";
+import type { IntegrationCapability } from "@/lib/student/integrations/types";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Link2 } from "lucide-react";
@@ -14,11 +18,11 @@ export function IntegrationSettings({ initial, result }: { initial: IntegrationS
   const callbackMessage = result === "connected" ? "Account connected successfully." : result === "ACCESS_DENIED" ? "Connection cancelled. No new access was saved."
     : result === "UNAUTHENTICATED" ? "Sign in again and restart the connection."
     : result ? "The account could not be connected. Please start again from this section." : "";
-  async function connect(provider: IntegrationProviderId, account?: ConnectedAccountView) {
+  async function connect(provider: IntegrationProviderId, account?: ConnectedAccountView, capabilities?: IntegrationCapability[]) {
     setError(""); setSuccess(""); setBusy(account?.id ?? provider);
     try {
       const value = await request<{ authorizationUrl: string }>("/api/student/integrations/connect", "POST", {
-        provider, capabilities: account?.capabilities.length ? account.capabilities : ["account-profile"], redirectPath: "/student/settings", ...(account ? { connectedAccountId: account.id } : {}),
+        provider, capabilities: capabilities ?? (account?.capabilities.length ? account.capabilities : ["account-profile"]), redirectPath: "/student/settings", ...(account ? { connectedAccountId: account.id } : {}),
       });
       window.location.assign(value.authorizationUrl);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Connection could not be started."); setBusy(null); }
@@ -34,7 +38,7 @@ export function IntegrationSettings({ initial, result }: { initial: IntegrationS
     finally { setBusy(null); }
   }
   return <section id="integrations" className="panel mt-6 max-w-4xl scroll-mt-20" aria-labelledby="integrations-title">
-    <div className="flex items-start justify-between gap-4"><div><p className="eyebrow">Connected services</p><h2 id="integrations-title" className="mt-1">Integrations</h2><p className="mt-2 text-sm text-muted-foreground">Connect an account now. Calendar, file, and email features will be added later.</p></div><Link2 className="shrink-0 text-primary" size={22} /></div>
+    <div className="flex items-start justify-between gap-4"><div><p className="eyebrow">Connected services</p><h2 id="integrations-title" className="mt-1">Integrations</h2><p className="mt-2 text-sm text-muted-foreground">Connect Google Calendar for scheduling and Google Drive for importing course materials.</p></div><Link2 className="shrink-0 text-primary" size={22} /></div>
     {callbackMessage && <p role={result === "connected" ? "status" : "alert"} className="mt-4 rounded-lg bg-muted p-3 text-sm">{callbackMessage}</p>}
     {data.providers.map((provider) => <div key={provider.id} className="mt-5 rounded-xl border p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold">{provider.name}</h3><p className="mt-1 text-sm text-muted-foreground">Account identity only when connecting a new account. Additional permissions require your approval.</p></div>
@@ -46,11 +50,14 @@ export function IntegrationSettings({ initial, result }: { initial: IntegrationS
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busy) || !provider.available} onClick={() => connect(provider.id, account)}>{account.status === "connected" ? "Reconnect account" : "Reconnect"}</Button>
             {account.status !== "disconnected" && <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => setConfirm(account)}>Disconnect</Button>}</div></div>
         {account.status !== "disconnected" && <ul className="mt-3 space-y-2">{account.capabilities.map((capability) => <li key={capability} className="text-sm"><strong>{CAPABILITY_LABELS[capability].title}</strong><p className="text-muted-foreground">{CAPABILITY_LABELS[capability].description}</p></li>)}</ul>}
+        {account.provider === "google" && account.status !== "disconnected" && <CalendarSettingsPanel account={account} disabled={Boolean(busy) || !provider.available || account.status === "needs-reconnect"} enable={(capabilities) => void connect(provider.id, account, capabilities)} />}
+        {account.provider === "google" && account.status !== "disconnected" && <DriveSettingsPanel account={account} disabled={Boolean(busy) || !provider.available} enable={() => void connect(provider.id, account, ["drive-read"])} />}
         {account.revocationFailed && account.status === "disconnected" && <p className="mt-3 text-sm text-muted-foreground">Local access is disabled. Review this app in your {provider.name} account permissions if you also want to verify external revocation.</p>}
       </article>)}
     </div>)}
     {error && <p role="alert" className="field-error mt-4">{error}</p>}
     <p role="status" className="mt-4 text-sm text-muted-foreground">{success || (busy ? "Updating your connection…" : "")}</p>
+    <AcademicIntegrationSettings />
     <AlertDialog open={Boolean(confirm)} onOpenChange={(open) => { if (!open) setConfirm(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Disconnect {data.providers.find((provider) => provider.id === confirm?.provider)?.name}?</AlertDialogTitle><AlertDialogDescription>This will stop future access to connected services from this app. It will not delete your external calendar, files, or emails.</AlertDialogDescription></AlertDialogHeader>
       <AlertDialogFooter><AlertDialogCancel>Keep connected</AlertDialogCancel><AlertDialogAction onClick={() => { if (confirm) void disconnect(confirm); }}>Disconnect account</AlertDialogAction></AlertDialogFooter>
     </AlertDialogContent></AlertDialog>

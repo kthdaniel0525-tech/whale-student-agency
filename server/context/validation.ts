@@ -20,6 +20,9 @@ export const contextSchema = z
       .optional(),
     options: z
       .object({
+        availability: z.boolean().default(false),
+        availabilityExcludePlanId: z.string().min(1).max(100).optional(),
+        availabilityWindow: z.object({startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()}).strict().optional(),
         profile: z.boolean().default(false),
         course: z.boolean().default(false),
         assignments: z.boolean().default(false),

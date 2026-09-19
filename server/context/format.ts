@@ -51,6 +51,7 @@ export function formatContextForAI(
   add("UPCOMING EXAMS", context.exams);
   add("RELEVANT COURSE MATERIAL", context.documents);
   add("LEARNING", context.learning);
+  add("STUDY AVAILABILITY", context.availability);
   if (!options.omitPersonalizationSignals) add("PREFERENCES", context.memories);
   if (!sections.length) return "";
   return (

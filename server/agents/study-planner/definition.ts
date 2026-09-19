@@ -19,6 +19,7 @@ const definition: Agent = {
   ],
   contextRequirements: {
     profile: true,
+    availability: true,
     course: true,
     assignments: true,
     exams: true,
@@ -32,7 +33,7 @@ const definition: Agent = {
       exams: 8,
       learning: 10,
       memories: 6,
-      maxCharacters: 24000,
+      maxCharacters: 40000,
     },
   },
 };
