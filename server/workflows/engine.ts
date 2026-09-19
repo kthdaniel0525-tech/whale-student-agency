@@ -5,6 +5,7 @@ import { db } from "../db/client";
 import { auth } from "../auth/config";
 import { ContextReadCache } from "../context/cache";
 import { observeWorkflowOutcome } from "../memory";
+import { refreshRemindersBestEffort } from "../reminders";
 import { WorkflowError, workflowError } from "./errors";
 import { recoveryResult } from "./recovery-policy";
 import type { StepInput, StepOutput, WorkflowContext, WorkflowDefinition, WorkflowInput, WorkflowResult, WorkflowStep } from "./types";
@@ -179,6 +180,7 @@ export class WorkflowEngine {
         await db().workflowRun.updateMany({ where: { id: run.id, userId }, data: { activeKey: null } });
         await db().workflowStepRun.updateMany({ where: { workflowRunId: run.id, userId, status: { in: ["PENDING", "RUNNING"] } }, data: { status: "SKIPPED", outputSummary: "Workflow stopped before this step completed.", completedAt: new Date() } });
       }
+      await refreshRemindersBestEffort(userId);
     }
     return this.get(run.id, headers);
   }
@@ -234,6 +236,7 @@ export class WorkflowEngine {
     const paused = await db().workflowRun.updateMany({ where: { id, userId, status: "WAITING_FOR_INPUT" }, data: { status: "CANCELLED", cancelledAt: new Date(), activeKey: null } });
     if (paused.count) await db().workflowStepRun.updateMany({ where: { workflowRunId: id, userId, status: "PENDING" }, data: { status: "SKIPPED", outputSummary: "Cancelled while waiting for input.", completedAt: new Date() } });
     await db().workflowRun.updateMany({ where: { id, userId, status: { in: ["PENDING", "RUNNING"] } }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+    await refreshRemindersBestEffort(userId);
     return this.get(id, headers);
   }
 }

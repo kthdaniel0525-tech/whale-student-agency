@@ -148,6 +148,8 @@ export async function saveProfile(userId: string, input: ProfileInput) {
       update: data,
     }),
   ]);
+  const { refreshNotificationPreferenceEffects } = await import("../preferences/notifications");
+  await refreshNotificationPreferenceEffects(userId);
   return { ...profile, name };
 }
 export async function dashboard(userId: string) {

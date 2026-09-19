@@ -1,5 +1,6 @@
 import "server-only";
 import { normalizeTopicName } from "../learning/normalization";
+import { calendarDayDifference } from "../time/local";
 import { RECOMMENDATION_CONFIG } from "./config";
 import type {
   RecommendationCandidate,
@@ -14,12 +15,12 @@ function bounded(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function daysUntil(date: Date, now: Date): number {
-  return Math.ceil((date.getTime() - now.getTime()) / DAY);
+function daysUntil(date: Date, now: Date, timezone: string): number {
+  return calendarDayDifference(date, now, timezone);
 }
 
-function daysSince(date: Date | null, now: Date): number {
-  return date ? Math.max(0, Math.floor((now.getTime() - date.getTime()) / DAY)) : 365;
+function daysSince(date: Date | null, now: Date, timezone: string): number {
+  return date ? Math.max(0, -calendarDayDifference(date, now, timezone)) : 365;
 }
 
 function urgencyBucket(days: number): string {
@@ -61,7 +62,7 @@ function examCandidates(
   const candidates: RecommendationCandidate[] = [];
   for (const exam of input.exams) {
     if (input.activeWorkflowSourceKeys.has(`exam:${exam.id}`)) continue;
-    const days = daysUntil(exam.examDate, input.now);
+    const days = daysUntil(exam.examDate, input.now, input.preferences.timezone);
     if (days < 0 || days > RECOMMENDATION_CONFIG.examWindowDays) continue;
     const names = new Set(exam.topics.map(normalizeTopicName));
     const topics = input.topics
@@ -86,7 +87,7 @@ function examCandidates(
     if (stronglyPrepared && days > 3) continue;
     for (const topic of topics) coveredTopics.add(topic.id);
     const course = input.courses.find((item) => item.id === exam.courseId);
-    const inactive = course && days > 7 && daysSince(course.lastActivityAt, input.now) >= RECOMMENDATION_CONFIG.courseInactivityDays;
+    const inactive = course && days > 7 && daysSince(course.lastActivityAt, input.now, input.preferences.timezone) >= RECOMMENDATION_CONFIG.courseInactivityDays;
     if (!target && inactive) {
       candidates.push({
         type: "course-inactivity",
@@ -103,7 +104,7 @@ function examCandidates(
         reasonCode: "COURSE_INACTIVE_WITH_UPCOMING_EXAM",
         reasonData: {
           daysRemaining: days,
-          inactiveDays: daysSince(course.lastActivityAt, input.now),
+          inactiveDays: daysSince(course.lastActivityAt, input.now, input.preferences.timezone),
           ...(exam.planCompletion !== null ? { planCompletion: exam.planCompletion } : {}),
         },
         prioritySignals: { urgency: deadlineUrgency(days), impact: 22, missedWork: 10 },
@@ -170,7 +171,7 @@ function assignmentCandidates(input: RecommendationDetectionInput): Recommendati
   return input.assignments.flatMap((assignment) => {
     if (assignment.status === "COMPLETED") return [];
     if (input.activeWorkflowSourceKeys.has(`assignment:${assignment.id}`)) return [];
-    const days = daysUntil(assignment.dueDate, input.now);
+    const days = daysUntil(assignment.dueDate, input.now, input.preferences.timezone);
     if (days > RECOMMENDATION_CONFIG.assignmentWindowDays) return [];
     const overdue = days < 0;
     const impact = assignment.priority === "HIGH" ? 25 : assignment.priority === "MEDIUM" ? 16 : 8;
@@ -290,7 +291,7 @@ function studyPlanCandidates(input: RecommendationDetectionInput): Recommendatio
 
 function lectureCandidates(input: RecommendationDetectionInput): RecommendationCandidate[] {
   return input.documents.flatMap((document) => {
-    const age = daysSince(document.createdAt, input.now);
+    const age = daysSince(document.createdAt, input.now, input.preferences.timezone);
     if (input.studiedDocumentIds.has(document.id) ||
       input.activeWorkflowSourceKeys.has(`document:${document.id}`) ||
       age > RECOMMENDATION_CONFIG.lectureFreshnessDays) return [];
@@ -321,7 +322,7 @@ function careerCandidates(input: RecommendationDetectionInput): RecommendationCa
   return input.careerPlans.flatMap((plan) => {
     if (plan.status !== "ACTIVE" || !plan.nextTask) return [];
     const due = plan.nextTask.targetDate ?? plan.targetDate;
-    const days = due ? daysUntil(due, input.now) : RECOMMENDATION_CONFIG.careerWindowDays;
+    const days = due ? daysUntil(due, input.now, input.preferences.timezone) : RECOMMENDATION_CONFIG.careerWindowDays;
     if (days > RECOMMENDATION_CONFIG.careerWindowDays && plan.nextTask.priority < 70) return [];
     return [{
       type: "career-preparation" as const,

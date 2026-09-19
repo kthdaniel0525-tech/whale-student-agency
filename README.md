@@ -1,5 +1,20 @@
 # Student Agency
 
+External account connection setup, encrypted token storage, OAuth security and manual
+Google verification are documented in [`docs/integrations-oauth.md`](docs/integrations-oauth.md).
+
+Background worker setup, scheduled recommendation refresh, and manual development triggering are documented in
+[`docs/background-jobs.md`](docs/background-jobs.md).
+
+Deadline and study reminder detection, persistence, timing, quiet hours, and
+user controls are documented in [`docs/reminders.md`](docs/reminders.md).
+
+In-app notification delivery, the notification center, and delivery worker setup
+are documented in [`docs/notifications.md`](docs/notifications.md).
+
+User-facing reminder, notification, quiet-hour and proactive recommendation controls
+are documented in [`docs/notification-settings.md`](docs/notification-settings.md).
+
 A student workspace with authentication, onboarding, courses, assignments, exams, settings, private document uploads and semantic search with document/page citations. Built with Next.js, PostgreSQL + pgvector, Prisma and Better Auth. Documents use local neural embeddings; AI chat and agents are deferred.
 
 ## Run locally

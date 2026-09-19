@@ -64,7 +64,7 @@ export function StudyPlanCard({
             <div className="flex items-center justify-between border-b pb-2"><h4 className="font-medium">{humanDate(day.date)}</h4><span className="text-xs muted">{day.totalMinutes} min</span></div>
             <div className="divide-y">
               {day.sessions.map((task, index) => (
-                <div key={task.id ?? `${day.date}-${index}`} className="py-3">
+                <div key={task.id ?? `${day.date}-${index}`} id={task.id ? `task-${task.id}` : undefined} className="py-3 scroll-mt-6">
                   <div className="flex items-start gap-3">
                     <span className="assistant-activity">{task.activityType}</span>
                     <div className="min-w-0 flex-1"><p className="font-medium">{task.title}</p><p className="text-sm muted">{task.topic ?? task.courseName} · {task.durationMinutes} min · priority {task.priority}</p><p className="mt-1 text-xs muted">{task.reason}</p></div>

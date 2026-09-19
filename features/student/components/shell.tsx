@@ -32,6 +32,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { NotificationBell } from "../notifications/bell";
 const links = [
   ["Dashboard", "/student", LayoutDashboard],
   ["AI Assistant", "/student/assistant", MessagesSquare],
@@ -78,7 +79,8 @@ export function Shell({
   const path = usePathname();
   const { resolvedTheme, setTheme } = useTheme();
   const [busy, setBusy] = useState(false);
-  const currentPage = links.find(([, href]) => href === "/student" ? path === href : path.startsWith(href))?.[0] ?? "Student workspace";
+  const currentPage = path === "/student/notifications" ? "Notifications"
+    : links.find(([, href]) => href === "/student" ? path === href : path.startsWith(href))?.[0] ?? "Student workspace";
   async function signOut() {
     setBusy(true);
     try {
@@ -137,6 +139,7 @@ export function Shell({
           <span className="ml-auto text-sm muted hidden sm:inline">
             {semester}
           </span>
+          <NotificationBell />
           <Button
             variant="ghost"
             size="icon"

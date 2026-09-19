@@ -46,16 +46,18 @@ export function AssistantWorkspace({
   initial,
   initialLaunch,
   initialConversation,
+  initialWorkflow,
 }: {
   initial: AssistantBootstrap;
   initialLaunch?: AssistantLaunch;
   initialConversation?: AssistantConversation;
+  initialWorkflow?: AssistantMessage;
 }) {
   const [conversations, setConversations] = useState(() => initialConversation
     ? updateHistory(initial.conversations, initialConversation)
     : initial.conversations);
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversation?.id);
-  const [messages, setMessages] = useState<AssistantMessage[]>(initialConversation?.messages ?? []);
+  const [messages, setMessages] = useState<AssistantMessage[]>(initialConversation?.messages ?? (initialWorkflow ? [initialWorkflow] : []));
   const [courseId, setCourseId] = useState(initialLaunch?.courseId ?? initialConversation?.courseId ?? "");
   const [documentIds, setDocumentIds] = useState<string[]>(initialLaunch?.documentIds ?? []);
   const [assignmentId, setAssignmentId] = useState(initialLaunch?.assignmentId ?? "");
@@ -253,7 +255,12 @@ export function AssistantWorkspace({
     userMessage?: AssistantMessage;
     assistantMessage?: AssistantMessage;
   }, runId: string) {
-    if (!result.userMessage || !result.assistantMessage) return;
+    if (!result.userMessage || !result.assistantMessage) {
+      if (result.workflow) setMessages((current) => current.map((message) => message.presentation?.workflow?.runId === runId
+        ? { ...message, content: result.workflow!.summary, presentation: { ...message.presentation,
+          workflow: result.workflow, quiz: result.quiz, studyPlan: result.studyPlan } } : message));
+      return;
+    }
     setMessages((current) => [
       ...current.map((message) => message.presentation?.workflow?.runId === runId
         ? { ...message, presentation: undefined }

@@ -30,6 +30,9 @@ try {
       "SELECT tablename FROM pg_tables WHERE schemaname='public'",
     );
     for (const table of [
+      "ConnectedAccount",
+      "OAuthConnectionSession",
+      "IntegrationSyncState",
       "User",
       "Profile",
       "Course",
@@ -67,6 +70,10 @@ try {
       "ConversationSummary",
       "AdaptiveOutcome",
       "Recommendation",
+      "Reminder",
+      "ReminderPreference",
+      "Notification",
+      "JobRun",
     ]) {
       if (!tables.rows.some((row) => row.tablename === table))
         throw new Error(`Missing ${table} table.`);
@@ -74,8 +81,12 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 16)
+    if (migration.rows[0].count !== 21)
       throw new Error("Unexpected applied migration count.");
+    const preferences = await verify.query(`SELECT column_name FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='ReminderPreference'
+      AND column_name IN ('proactiveRecommendationsEnabled','quietHoursEnabled','notificationFrequency')`);
+    if (preferences.rows.length !== 3) throw new Error("Missing automation settings columns.");
     const memoryColumns = await verify.query(
       `SELECT column_name FROM information_schema.columns
        WHERE table_schema='public' AND table_name='UserMemory'
@@ -104,7 +115,7 @@ try {
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
     console.log(
-      "Fresh PostgreSQL migration verified: 37 tables, 16 migrations, course workspace indexes, learning progress snapshots, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
+      "Fresh PostgreSQL migration verified: 44 tables, 21 migrations, encrypted external connections, automation settings, notification delivery, reminder intelligence, background job runs, course workspace indexes, learning progress snapshots, proactive recommendations, adaptive outcomes, conversation memory, semantic vectors, pgvector 0.8.2 and file-deletion trigger.",
     );
   } finally {
     await verify.end();

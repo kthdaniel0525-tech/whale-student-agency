@@ -105,6 +105,7 @@ export interface RecommendationDetectionInput {
   readonly now: Date;
   readonly preferences: {
     readonly studySessionMinutes: number;
+    readonly timezone: string;
   };
   readonly courses: readonly {
     id: string;

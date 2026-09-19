@@ -1,13 +1,23 @@
 import Link from "next/link";
+import { IntegrationSettings } from "@/features/student/integrations/settings";
+import { getIntegrationSettings } from "@/server/integrations/service";
 import { headers } from "next/headers";
 import { Brain, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { requirePageUser } from "@/server/auth/session";
 import { listMemories } from "@/server/memory";
 import { ProfileForm } from "@/features/student/components/profile-form";
-export default async function Settings() {
+import { NotificationSettings } from "@/features/student/notifications/settings";
+import { getNotificationPreferences } from "@/server/preferences/notifications";
+export default async function Settings({ searchParams }: { searchParams: Promise<{ integration?: string }> }) {
+  const result = await searchParams;
   const { user, profile } = await requirePageUser();
-  const memories = await listMemories({ status: "active", limit: 100 }, await headers()).catch(() => []);
+  const requestHeaders = await headers();
+  const [memories, preferences, integrations] = await Promise.all([
+    listMemories({ status: "active", limit: 100 }, requestHeaders).catch(() => []),
+    getNotificationPreferences(user.id),
+    getIntegrationSettings(user.id),
+  ]);
   const categories = new Set(memories.map((memory) => memory.category)).size;
   return (
     <>
@@ -34,6 +44,8 @@ export default async function Settings() {
           }}
         />
       </section>
+      <NotificationSettings key={preferences.timezone} initial={preferences} />
+      <IntegrationSettings initial={integrations} result={result.integration} />
       <section className="panel mt-6 max-w-4xl">
         <div className="settings-memory-heading"><div><p className="eyebrow">Personalization</p><h2>AI context &amp; memory</h2></div><Brain /></div>
         <p className="settings-memory-copy">Your assistant can use your saved profile, conversation history, and supported learning preferences to keep help relevant across sessions.</p>

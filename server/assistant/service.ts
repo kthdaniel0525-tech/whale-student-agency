@@ -502,6 +502,17 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
   });
 }
 
+export async function getAssistantWorkflowMessage(runId: string, headers: Headers): Promise<AssistantMessage> {
+  const workflow = await new WorkflowService().getRun(runId, headers);
+  return {
+    id: `workflow-${workflow.runId}`, role: "assistant", turnId: null,
+    content: workflow.summary, agentId: null, createdAt: new Date().toISOString(), metadata: null,
+    presentation: { mode: "workflow", kind: "workflow", targetId: workflow.workflowId,
+      targetName: workflow.workflowId, workflow, status: workflow.status,
+      actions: buildWorkflowActions(workflow), ...(await hydrateWorkflow(workflow, headers)) },
+  };
+}
+
 export async function getAssistantQuiz(quizId: string, headers: Headers) {
   return hydrateQuizExperience(quizId, headers);
 }

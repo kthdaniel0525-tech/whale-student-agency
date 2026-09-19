@@ -27,6 +27,8 @@
     "db:generate:sites": "drizzle-kit generate",
     "test:migration": "node scripts/verify-migration.mjs",
     "documents:worker": "node scripts/document-worker.mjs",
+    "jobs:worker": "node --conditions=react-server --import tsx scripts/background-worker.ts",
+    "jobs:trigger": "node --conditions=react-server --import tsx scripts/trigger-background-job.ts",
     "embeddings:prepare": "node --conditions=react-server --import tsx scripts/prepare-embeddings.ts"
   },
   "dependencies": {
@@ -51,6 +53,7 @@
     "openai": "7.15.0",
     "pdfjs-dist": "6.3.289",
     "pg": "8.23.0",
+    "pg-boss": "^12.33.2",
     "radix-ui": "^1.6.7",
     "react": "19.2.6",
     "react-day-picker": "^10.0.1",

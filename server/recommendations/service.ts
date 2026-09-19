@@ -2,6 +2,7 @@ import "server-only";
 import { auth } from "../auth/config";
 import { STUDENT_AGENT_IDS } from "../agents/types";
 import { db } from "../db/client";
+import { getNotificationPreferences, enabledReminderTypes } from "../preferences/notifications";
 import { WORKFLOW_IDS } from "../workflows/types";
 import { RECOMMENDATION_CONFIG } from "./config";
 import { detectRecommendationCandidates, rankRecommendationCandidates } from "./detection";
@@ -155,7 +156,7 @@ async function loadDetectionInput(userId: string, now: Date): Promise<Recommenda
   const user = await db().user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!user) throw new RecommendationError("NOT_FOUND");
   const [profile, courses, exams, assignments, topicRows, studyPlans, documents, lectureRuns, activeRuns, completedLectures, careerPlans, outcomes] = await Promise.all([
-    db().profile.findUnique({ where: { userId }, select: { studySessionMinutes: true } }),
+    db().profile.findUnique({ where: { userId }, select: { studySessionMinutes: true, timezone: true } }),
     db().course.findMany({ where: { userId }, select: { id: true, courseCode: true, courseName: true } }),
     db().exam.findMany({
       where: { userId, examDate: { gte: new Date(now.getTime() - DAY) } },
@@ -242,7 +243,10 @@ async function loadDetectionInput(userId: string, now: Date): Promise<Recommenda
   }
   return {
     now,
-    preferences: { studySessionMinutes: profile?.studySessionMinutes ?? 45 },
+    preferences: {
+      studySessionMinutes: profile?.studySessionMinutes ?? 45,
+      timezone: profile?.timezone ?? "UTC",
+    },
     courses: courses.map((course) => ({ ...course, lastActivityAt: topicActivity.get(course.id) ?? null })),
     exams: exams.map((exam) => {
       const plan = examPlans.get(exam.id);
@@ -311,6 +315,8 @@ export async function evaluateRecommendations(
   if (!userId || userId.length > 100) throw new RecommendationError("INVALID_REQUEST");
   const now = options.now ?? new Date();
   try {
+    if (!(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
+      return { recommendations: [], created: 0, updated: 0, expired: 0, suppressed: 0 };
     const input = await loadDetectionInput(userId, now);
     const ranked = rankRecommendationCandidates(detectRecommendationCandidates(input))
       .filter(validCandidateTarget)
@@ -318,6 +324,7 @@ export async function evaluateRecommendations(
     let created = 0, updated = 0, expired = 0, suppressed = 0;
     await db().$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
+      if (!(await getNotificationPreferences(userId, transaction)).proactiveRecommendationsEnabled) return;
       const active = await transaction.recommendation.findMany({ where: { userId, status: "ACTIVE" } });
       const selected = new Set(ranked.map((candidate) => candidate.dedupeKey));
       for (const row of active) {
@@ -363,6 +370,8 @@ export async function evaluateRecommendations(
         created++;
       }
     });
+    if (!(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
+      return { recommendations: [], created, updated, expired, suppressed };
     const rows = await db().recommendation.findMany({
       where: { userId, status: "ACTIVE", OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
       orderBy: [{ priorityScore: "desc" }, { updatedAt: "desc" }, { id: "asc" }],
@@ -384,6 +393,7 @@ export async function getTopRecommendations(input: {
   const limit = input.limit ?? RECOMMENDATION_CONFIG.defaultTopLimit;
   if (!Number.isInteger(limit) || limit < 1 || limit > RECOMMENDATION_CONFIG.maximumTopLimit)
     throw new RecommendationError("INVALID_REQUEST");
+  if (!(await getNotificationPreferences(input.userId)).proactiveRecommendationsEnabled) return [];
   if (input.refresh !== false) await evaluateRecommendations(input.userId, { ...(input.now ? { now: input.now } : {}) });
   const now = input.now ?? new Date();
   const rows = await db().recommendation.findMany({
@@ -446,7 +456,7 @@ async function referenceExists(userId: string, kind: string, id: string): Promis
 /** Returns a validated launch descriptor. Execution remains an explicit user action. */
 export async function startRecommendedAction(userId: string, id: string): Promise<RecommendationAction> {
   const row = await ownedRecommendation(userId, id);
-  if (row.status !== "ACTIVE") throw new RecommendationError("NOT_FOUND");
+  if (row.status !== "ACTIVE" || !(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled) throw new RecommendationError("NOT_FOUND");
   const payload = jsonObject(row.actionPayload) ?? {};
   const sourceKind = {
     EXAM: "examId",
@@ -483,5 +493,25 @@ export async function getOwnedTopRecommendations(headers: Headers, limit = RECOM
 }
 
 export async function refreshRecommendationsBestEffort(userId: string): Promise<void> {
-  try { await evaluateRecommendations(userId); } catch { /* Optional refresh never invalidates the triggering domain write. */ }
+  try {
+    const preferences = await getNotificationPreferences(userId);
+    // Tests keep deterministic domain writes isolated from a long-lived queue client.
+    // Production mutations enqueue one debounced, user-scoped refresh instead.
+    if (process.env.NODE_ENV === "test") {
+      const { evaluateReminders } = await import("../reminders");
+      await Promise.allSettled([
+        ...(preferences.proactiveRecommendationsEnabled ? [evaluateRecommendations(userId)] : []),
+        ...(enabledReminderTypes(preferences).length ? [evaluateReminders(userId)] : []),
+      ]);
+    }
+    else {
+      const { enqueueRecommendationRefresh, enqueueReminderRefresh } = await import("../jobs/enqueue");
+      await Promise.allSettled([
+        ...(preferences.proactiveRecommendationsEnabled ? [enqueueRecommendationRefresh(userId)] : []),
+        ...(enabledReminderTypes(preferences).length ? [enqueueReminderRefresh(userId)] : []),
+      ]);
+    }
+  } catch {
+    // Optional refresh never invalidates the triggering domain write.
+  }
 }

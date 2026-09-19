@@ -161,6 +161,45 @@ model User {
   conversationMessages ConversationMessage[]
   adaptiveOutcomes     AdaptiveOutcome[]
   recommendations      Recommendation[]
+  reminders            Reminder[]
+  notifications        Notification[]
+  reminderPreference   ReminderPreference?
+  jobRuns              JobRun[]
+  connectedAccounts    ConnectedAccount[]
+  oauthConnectionSessions OAuthConnectionSession[]
+}
+
+enum JobRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// Safe application-level audit data for background execution. Queue payloads and
+// private academic content stay in pg-boss and are never copied into this table.
+model JobRun {
+  id             String       @id @default(cuid())
+  queueJobId     String       @unique
+  idempotencyKey String       @unique
+  jobName        String
+  jobVersion     Int
+  userId         String?
+  resourceId     String?
+  status         JobRunStatus @default(PENDING)
+  attempt        Int          @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failedAt       DateTime?
+  errorCode      String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  user           User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([jobName, status, createdAt])
+  @@index([userId, jobName, status, createdAt])
 }
 
 enum WorkflowRunStatus {
@@ -215,6 +254,44 @@ enum RecommendationSourceType {
   COURSE
   DOCUMENT
   CAREER_PLAN
+}
+
+enum ReminderType {
+  ASSIGNMENT_DUE
+  ASSIGNMENT_OVERDUE
+  EXAM_UPCOMING
+  EXAM_TOMORROW
+  STUDY_SESSION
+  MISSED_STUDY_TASK
+  STUDY_PLAN_BEHIND
+  WEAK_TOPIC_BEFORE_EXAM
+  DIAGNOSTIC_PRACTICE
+  WORKFLOW_WAITING
+}
+
+enum ReminderStatus {
+  SCHEDULED
+  READY
+  DELIVERED
+  DISMISSED
+  SNOOZED
+  EXPIRED
+  CANCELLED
+}
+
+enum ReminderSourceType {
+  ASSIGNMENT
+  EXAM
+  STUDY_TASK
+  STUDY_PLAN
+  LEARNING_TOPIC
+  WORKFLOW_RUN
+}
+
+enum ReminderActionTargetType {
+  AGENT
+  WORKFLOW
+  RESOURCE
 }
 
 model WorkflowRun {
@@ -475,6 +552,119 @@ model Recommendation {
   @@index([userId, supersessionKey, status])
   @@index([userId, sourceType, sourceId])
   @@index([userId, dedupeKey, createdAt])
+}
+
+// Timing-specific academic alerts. Delivery channels consume these records later;
+// this layer only decides relevance, timing, priority, and safe action targets.
+model Reminder {
+  id               String                   @id @default(cuid())
+  userId           String
+  type             ReminderType
+  title            String
+  message          String
+  priority         RecommendationPriority
+  priorityScore    Int
+  status           ReminderStatus           @default(SCHEDULED)
+  sourceType       ReminderSourceType
+  sourceId         String?
+  scheduledFor     DateTime
+  expiresAt        DateTime?
+  deliveredAt      DateTime?
+  dismissedAt      DateTime?
+  snoozedUntil     DateTime?
+  preferenceSuppressedAt DateTime?
+  reasonCode       String
+  reasonData       Json
+  actionTargetType ReminderActionTargetType?
+  actionTargetId   String?
+  actionPayload    Json?
+  dedupeKey        String
+  supersessionKey  String
+  stateFingerprint String
+  activeKey        String?                  @unique
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notifications    Notification[]
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, status, scheduledFor, priorityScore])
+  @@index([userId, supersessionKey, status])
+  @@index([userId, sourceType, sourceId])
+  @@index([status, scheduledFor, userId])
+}
+
+model ReminderPreference {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  remindersEnabled    Boolean  @default(true)
+  inAppEnabled        Boolean  @default(true)
+  proactiveRecommendationsEnabled Boolean @default(true)
+  quietHoursEnabled   Boolean @default(false)
+  notificationFrequency NotificationFrequency @default(AS_READY)
+  assignmentReminders Boolean  @default(true)
+  examReminders       Boolean  @default(true)
+  studyReminders      Boolean  @default(true)
+  workflowReminders   Boolean  @default(true)
+  leadTimeMinutes     Int      @default(30)
+  quietHoursStart     Int?
+  quietHoursEnd       Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum NotificationFrequency {
+  AS_READY
+  HOURLY
+}
+
+enum NotificationChannelType {
+  IN_APP
+  EMAIL
+  PUSH
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  DELIVERED
+  READ
+  DISMISSED
+  FAILED
+}
+
+// A single delivery artifact per reminder/channel. Snooze reuses this row;
+// deliveryCount records explicit redelivery, never retry-created duplicates.
+model Notification {
+  id               String @id @default(cuid())
+  userId           String
+  reminderId       String?
+  channel          NotificationChannelType @default(IN_APP)
+  type             ReminderType
+  title            String
+  message          String
+  priority         RecommendationPriority
+  status           NotificationStatus @default(PENDING)
+  actionTargetType ReminderActionTargetType?
+  actionTargetId   String?
+  actionPayload    Json?
+  scheduledFor     DateTime
+  deliveredAt      DateTime?
+  readAt           DateTime?
+  dismissedAt      DateTime?
+  deliveryCount    Int @default(0)
+  failedAttempts   Int @default(0)
+  lastErrorCode    String?
+  deliveryLatencyMs Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminder         Reminder? @relation(fields: [reminderId], references: [id], onDelete: SetNull)
+
+  @@unique([reminderId, channel])
+  @@index([userId, channel, status, deliveredAt, id])
+  @@index([userId, channel, deliveredAt, id])
 }
 
 // Explicitly saved career information; agent responses are never saved here automatically.
@@ -961,4 +1151,87 @@ model FileDeletion {
 
   @@index([retryAt])
   @@index([userId])
+}
+
+
+enum ConnectedAccountStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+}
+
+enum IntegrationSyncStatus {
+  IDLE
+  SYNCING
+  COMPLETED
+  FAILED
+}
+
+// External service grants are separate from Better Auth login Account records.
+model ConnectedAccount {
+  id                       String @id @default(cuid())
+  userId                   String
+  user                     User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider                 String
+  providerAccountId        String
+  displayName              String?
+  email                    String?
+  status                   ConnectedAccountStatus @default(ACTIVE)
+  scopes                   String[]
+  accessTokenEncrypted     String?
+  refreshTokenEncrypted    String?
+  accessTokenExpiresAt     DateTime?
+  connectedAt              DateTime @default(now())
+  lastRefreshedAt           DateTime?
+  revokedAt                DateTime?
+  lastErrorCode            String?
+  refreshRetryAfter        DateTime?
+  revocationPendingUntil   DateTime?
+  revocationErrorCode      String?
+  credentialVersion        Int @default(1)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  syncStates               IntegrationSyncState[]
+
+  @@unique([userId, provider, providerAccountId])
+  @@index([userId, status])
+}
+
+model OAuthConnectionSession {
+  id                       String @id @default(cuid())
+  userId                   String
+  user                     User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider                 String
+  stateHash                String @unique
+  authenticationSessionHash String
+  codeVerifierEncrypted    String?
+  requestedScopes          String[]
+  targetAccountId          String?
+  redirectPath             String
+  expiresAt                DateTime
+  usedAt                   DateTime?
+  completedAt              DateTime?
+  resultAccountId          String?
+  createdAt                DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model IntegrationSyncState {
+  id                       String @id @default(cuid())
+  connectedAccountId       String
+  connectedAccount         ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+  integrationType          String
+  cursorEncrypted          String?
+  lastSyncStartedAt        DateTime?
+  lastSyncCompletedAt      DateTime?
+  lastSuccessfulSyncAt     DateTime?
+  status                   IntegrationSyncStatus @default(IDLE)
+  lastErrorCode            String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([connectedAccountId, integrationType])
 }

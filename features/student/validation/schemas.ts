@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidTimezone } from "@/lib/student/timezone";
 const text = (max: number) =>
   z.string().trim().min(1, "This field is required.").max(max);
 const optionalText = (max: number) => z.string().trim().max(max).default("");
@@ -12,17 +13,7 @@ export const profileSchema = z
     academicGoal: text(1000),
     studySessionMinutes: z.number().int().min(10).max(180),
     explanationDifficulty: z.enum(["BEGINNER", "INTERMEDIATE", "ADVANCED"]),
-    timezone: z
-      .string()
-      .max(100)
-      .refine((value) => {
-        try {
-          new Intl.DateTimeFormat("en", { timeZone: value });
-          return true;
-        } catch {
-          return false;
-        }
-      }, "Choose a valid timezone."),
+    timezone: z.string().trim().max(100).refine(isValidTimezone, "Choose a valid IANA timezone."),
   })
   .strict();
 export const courseSchema = z
