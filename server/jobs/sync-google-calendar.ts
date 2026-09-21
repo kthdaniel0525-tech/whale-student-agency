@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -6,7 +7,7 @@ import { db } from "../db/client";
 import { googleCalendarService } from "../calendar/service";
 import { getBackgroundJobPublisher } from "./client";
 import { getBackgroundJobConfig } from "./config";
-import type { BackgroundJob } from "./types";
+import type { BackgroundJob, BackgroundJobResult } from "./types";
 const retryPolicy = { limit: 2, delaySeconds: 30, maximumDelaySeconds: 120, exponentialBackoff: true } as const;
 export const syncGoogleCalendarJob: BackgroundJob<{
     version: 1;
@@ -15,10 +16,11 @@ export const syncGoogleCalendarJob: BackgroundJob<{
 }> = {
     name: "sync-google-calendar", version: 1, payloadSchema: z.object({ version: z.literal(1), connectedAccountId: z.string().min(1).max(100), trackingId: z.string().max(100).optional() }).strict(),
     retryPolicy, timeoutSeconds: 180, priority: "normal", executionScope: "system", concurrency: { scope: "global", limit: 1 }, debounceSeconds: 30,
-    async handler({ payload, signal }) {
+    async handler({ payload, signal }): Promise<BackgroundJobResult> {
         const account = await db().connectedAccount.findFirst({ where: { id: payload.connectedAccountId, provider: "google", status: { in: ["ACTIVE", "ERROR"] }, calendarPreferences: { some: { OR: [{ enabledForAvailability: true }, { allowStudyWrites: true }] } } }, select: { userId: true, id: true } });
         if (!account)
             return { skipped: true };
+        if (!await hasEntitlement(account.userId, "integration.calendar")) return { skipped: true, reason: "ENTITLEMENT_REQUIRED" };
         return googleCalendarService.syncAccount(account.userId, account.id, true, signal);
     },
 };
@@ -61,12 +63,13 @@ export function createCalendarSyncSweep(enqueue = (id: string) => enqueueGoogleC
     name: "schedule-google-calendar-sync", version: 1, payloadSchema: z.object({ version: z.literal(1), trackingId: z.string().max(100).optional() }).strict(), retryPolicy, timeoutSeconds: 120, priority: "low", executionScope: "system", concurrency: { scope: "global", limit: 1 }, debounceSeconds: 60,
     async handler({ signal }) {
         const due = new Date(Date.now() - 15 * 60000);
-        const accounts = await db().connectedAccount.findMany({ where: { provider: "google", status: { in: ["ACTIVE", "ERROR"] }, calendarPreferences: { some: { OR: [{ enabledForAvailability: true }, { allowStudyWrites: true }] } }, NOT: { syncStates: { some: { integrationType: "calendar-read", lastSyncStartedAt: { gte: due } } } } }, select: { id: true }, orderBy: { id: "asc" }, take: 100 });
+        const accounts = await db().connectedAccount.findMany({ where: { provider: "google", status: { in: ["ACTIVE", "ERROR"] }, calendarPreferences: { some: { OR: [{ enabledForAvailability: true }, { allowStudyWrites: true }] } }, NOT: { syncStates: { some: { integrationType: "calendar-read", lastSyncStartedAt: { gte: due } } } } }, select: { id: true, userId: true }, orderBy: { id: "asc" }, take: 100 });
         let enqueued = 0, failed = 0;
         for (const account of accounts) {
             if (signal.aborted)
                 break;
             try {
+                if (!await hasEntitlement(account.userId, "integration.calendar")) continue;
                 await enqueue(account.id);
                 enqueued++;
             } catch { failed++; } // One unavailable account/queue publication must not starve the batch.

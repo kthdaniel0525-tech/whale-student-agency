@@ -1,0 +1,172 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "notes-induction",
+      "profile": "notes",
+      "request": "Explain the inductive hypothesis using my notes in two bullet points.",
+      "context": {
+        "output": "- Assume P(k) for an arbitrary integer k in the domain.\n- Use that hypothesis to prove P(k+1); check the base case separately.",
+        "sources": [
+          {
+            "id": "math:0",
+            "documentId": "math",
+            "chunkIndex": 0,
+            "content": "The inductive hypothesis assumes P(k) for an arbitrary integer k in the specified domain. Prove P(k+1) from that assumption and establish the base case separately."
+          }
+        ],
+        "citedSourceIds": [
+          "math:0"
+        ],
+        "requestedSourceIds": [
+          "math"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "format": "bullets",
+          "requiredTerms": [
+            "P(k)",
+            "base case"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "notes-base-case",
+      "profile": "notes",
+      "request": "Write concise source-grounded notes: Explain why a base case is necessary.",
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ],
+      "context": {
+        "output": "A base case establishes the first valid instance. The inductive step alone cannot establish any starting truth.",
+        "sources": [
+          {
+            "id": "base-case:0",
+            "documentId": "base-case",
+            "chunkIndex": 0,
+            "content": "A base case establishes the first valid instance. The inductive step alone cannot establish any starting truth."
+          }
+        ],
+        "citedSourceIds": [
+          "base-case:0"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "requiredTerms": [
+            "base case",
+            "inductive step"
+          ]
+        }
+      }
+    },
+    {
+      "id": "notes-recursion",
+      "profile": "notes",
+      "request": "Write concise source-grounded notes: Explain the stopping condition of recursion.",
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ],
+      "context": {
+        "output": "A recursive function needs a base case that returns without another recursive call. Each recursive call should progress toward that case.",
+        "sources": [
+          {
+            "id": "recursion:0",
+            "documentId": "recursion",
+            "chunkIndex": 0,
+            "content": "A recursive function needs a base case that returns without another recursive call. Each recursive call should progress toward that case."
+          }
+        ],
+        "citedSourceIds": [
+          "recursion:0"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "requiredTerms": [
+            "base case",
+            "recursive"
+          ]
+        }
+      }
+    },
+    {
+      "id": "notes-contradiction",
+      "profile": "notes",
+      "request": "Write concise source-grounded notes: Explain proof by contradiction.",
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ],
+      "context": {
+        "output": "Assume the negation of the claim, derive a contradiction, and conclude the original claim holds in classical logic.",
+        "sources": [
+          {
+            "id": "contradiction:0",
+            "documentId": "contradiction",
+            "chunkIndex": 0,
+            "content": "Assume the negation of the claim, derive a contradiction, and conclude the original claim holds in classical logic."
+          }
+        ],
+        "citedSourceIds": [
+          "contradiction:0"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "requiredTerms": [
+            "negation",
+            "contradiction"
+          ]
+        }
+      }
+    },
+    {
+      "id": "notes-linked-list",
+      "profile": "notes",
+      "request": "Write concise source-grounded notes: Explain linked list traversal.",
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ],
+      "context": {
+        "output": "Start at the head and follow each next pointer until it is null. A cycle requires detection to avoid infinite traversal.",
+        "sources": [
+          {
+            "id": "linked-list:0",
+            "documentId": "linked-list",
+            "chunkIndex": 0,
+            "content": "Start at the head and follow each next pointer until it is null. A cycle requires detection to avoid infinite traversal."
+          }
+        ],
+        "citedSourceIds": [
+          "linked-list:0"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "requiredTerms": [
+            "head",
+            "next",
+            "null"
+          ]
+        }
+      }
+    }
+  ]
+}

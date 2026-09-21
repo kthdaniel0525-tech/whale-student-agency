@@ -1,4 +1,5 @@
 import "server-only";
+import { isGuardrailError, AIError } from "../../ai/errors";
 import { z } from "zod";
 import type { AIProvider } from "../../ai/types";
 import type { AgentRegistry } from "../registry";
@@ -183,7 +184,8 @@ export class AgentRouter<Extension extends string = never> {
         method: "llm-fallback",
         reason: "Selected from registered agent metadata.",
       };
-    } catch {
+    } catch (error) {
+      if (isGuardrailError(error) || error instanceof AIError && ["AI_SERVICE_TEMPORARILY_UNAVAILABLE", "CANCELLED"].includes(error.code)) throw error;
       // Configuration, provider and response errors share a safe routing fallback.
       return undefined;
     }

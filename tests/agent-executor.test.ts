@@ -1,3 +1,4 @@
+import { testAllowances, testEntitlements } from "./entitlement-fixture";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   AgentRegistry,
@@ -9,6 +10,10 @@ import {
   AgentExecutionError,
   type AgentExecutionRequest,
 } from "../server/agents/executor";
+import { createRoutedAIProvider } from "@/server/ai/routing/provider";
+import { AIProviderRegistry } from "@/server/ai/registry";
+import { DEFAULT_MODEL_CATALOG } from "@/server/ai/routing/catalog";
+import { testGuards, testHealth } from "./guard-fixture";
 import { AIError } from "../server/ai/errors";
 import type { AIProvider, AITextResponse } from "../server/ai/types";
 import { buildUserContext } from "../server/context/builder";
@@ -168,7 +173,7 @@ function aiBoundary() {
     },
   };
   const getProvider = vi.fn(() => provider);
-  return { generate, getProvider };
+  return { generate, getProvider, provider };
 }
 
 beforeEach(() => {
@@ -327,6 +332,7 @@ describe("AgentExecutor pipeline", () => {
         options: agents.get("notes").contextRequirements,
       },
       headers,
+      undefined, { agentId: "notes" },
     );
     expect(buildContext.mock.calls[0][1]).toBe(headers);
     expect(ai.getProvider.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -364,7 +370,7 @@ describe("AgentExecutor pipeline", () => {
     expect(messages[1].content).toContain("PRIVATE EXAM");
     expect(JSON.stringify(messages)).not.toMatch(/\[PREFERENCES\]|improve_grades/);
     expect(result.agentId).toBe("notes"); // Selection is never rerouted to Tutor.
-    expect(ai.generate.mock.calls[0][0]).toEqual({ messages, usageContext: expect.objectContaining({ agentId: "notes", ragChunkCount: 1, requestId: expect.any(String) }) });
+    expect(ai.generate.mock.calls[0][0]).toEqual({ messages, usageContext: expect.objectContaining({ agentId: "notes", ragChunkCount: 1, requestId: expect.any(String) }), routing: expect.objectContaining({ signals: expect.objectContaining({ sourceCount: 1, ragChunkCount: 1 }) }) });
   });
 
   it("authenticates via Context Builder even with empty requirements and omits empty reference messages", async () => {
@@ -385,6 +391,7 @@ describe("AgentExecutor pipeline", () => {
     expect(buildContext).toHaveBeenCalledWith(
       { request: "Hello", options: {} },
       headers,
+      undefined, { agentId: "custom-agent" },
     );
     expect(result).toMatchObject({
       agentId: "custom-agent",
@@ -687,6 +694,24 @@ describe("execution validation and failures", () => {
       expect(ai.getProvider).not.toHaveBeenCalled();
     },
   );
+
+  it("receives normalized fallback output through the same executor", async () => {
+    const ai = aiBoundary(), fallback = aiBoundary();
+    vi.mocked(ai.provider.generateText).mockRejectedValue(new AIError("TIMEOUT"));
+    const base = DEFAULT_MODEL_CATALOG[1];
+    const models = [{ ...base, provider: "primary", model: "a", fallbackModels: [{ provider: "backup", model: "b" }] }, { ...base, provider: "backup", model: "b", relativeCostClass: 9, fallbackModels: [] }];
+    const health = testHealth(), providers = new AIProviderRegistry(() => models, health);
+    for (const [id, transport] of [["primary", ai.provider], ["backup", fallback.provider]] as const) providers.register({ id, create: () => transport, tracking: { embeddingModel: "unused", allowances: testAllowances, guards: testGuards(), write: async () => {} } });
+    const provider = createRoutedAIProvider({ entitlements: testEntitlements, registry: providers, catalog: models, health, history: async () => [], embeddingProvider: ai.provider });
+    const result = await new AgentExecutor(registry(), { getProvider: () => provider }).execute({ agentId: "tutor", request: "Explain induction" }, headers);
+    expect(result.content).toBeTruthy(); expect(ai.provider.generateText).toHaveBeenCalledOnce(); expect(fallback.provider.generateText).toHaveBeenCalledOnce();
+  });
+  it("stops source-grounded generation when the embedding reliability layer is unavailable", async () => {
+    buildContext.mockRejectedValue(new AIError("AI_SERVICE_TEMPORARILY_UNAVAILABLE"));
+    const ai = aiBoundary();
+    await expect(new AgentExecutor(registry(), ai).execute({ agentId: "notes", request: "Summarize this lecture", documentIds: ["doc-1"] }, headers)).rejects.toMatchObject({ code: "CONTEXT_FAILURE" });
+    expect(ai.getProvider).not.toHaveBeenCalled();
+  });
 
   it("sanitizes context access/data failures and never retries with broader scope", async () => {
     buildContext.mockRejectedValue(

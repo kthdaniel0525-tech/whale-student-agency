@@ -1,0 +1,35 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "manager-urgent-assignment",
+      "profile": "academic-manager",
+      "request": "Prioritize my overdue assignment before optional review.",
+      "context": {
+        "output": {
+          "priorityIds": [
+            "overdue-assignment",
+            "exam"
+          ],
+          "text": "Complete the overdue assignment, then prepare for the exam."
+        },
+        "expected": {
+          "urgentIds": [
+            "overdue-assignment"
+          ],
+          "allowedIds": [
+            "overdue-assignment",
+            "exam"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

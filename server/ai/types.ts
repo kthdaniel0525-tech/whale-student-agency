@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { AIUsageContext } from "./usage/types";
+import type { ModelRoutingHints, ReasoningEffort } from "./routing/types";
 
 export type AIMessage = {
   role: "system" | "user" | "assistant";
@@ -12,7 +13,12 @@ export type AITextRequest = {
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  /** Central reliability timeout, forwarded to the transport. */
+  timeoutMs?: number;
   usageContext?: AIUsageContext;
+  /** Trusted execution hints; never populated from frontend model selection. */
+  routing?: ModelRoutingHints;
+  reasoningEffort?: ReasoningEffort;
 };
 
 export type AIUsage = {
@@ -45,6 +51,8 @@ export type AIEmbeddingRequest = {
   model?: string;
   dimensions?: number;
   signal?: AbortSignal;
+  /** Central reliability timeout, forwarded to the transport. */
+  timeoutMs?: number;
   usageContext?: AIUsageContext;
 };
 export type AIEmbeddingResponse = { model: string; vector: number[]; usage?: AIUsage };

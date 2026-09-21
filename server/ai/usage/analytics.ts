@@ -8,7 +8,7 @@ const filterSchema = z.object({
   start: z.date().optional(), end: z.date().optional(),
 }).refine(v => !v.start || !v.end || v.start < v.end);
 export type UsageFilter = z.infer<typeof filterSchema>;
-type Group = "user" | "agent" | "workflow" | "model" | "day" | "operation";
+type Group = "user" | "agent" | "workflow" | "model" | "day" | "operation" | "tier";
 type UsageAggregate = {
   key: string | null; provider: string | null; kind: "generation" | "embedding";
   providerAttempts: number; successfulProviderAttempts: number; failedProviderAttempts: number;
@@ -30,6 +30,7 @@ async function aggregate(input: UsageFilter, group: Group) {
   const key = {
     user: Prisma.sql`NULL::text`, agent: Prisma.sql`"agentId"`, workflow: Prisma.sql`"workflowId"`,
     model: Prisma.sql`model`, day: Prisma.sql`to_char("createdAt", 'YYYY-MM-DD')`, operation: Prisma.sql`"operationType"`,
+    tier: Prisma.sql`"selectedTier"`,
   }[group];
   const provider = group === "model" ? Prisma.sql`provider` : Prisma.sql`NULL::text`;
   const rows = await db().$queryRaw<UsageAggregate[]>(Prisma.sql`
@@ -73,6 +74,7 @@ export const getUserAIUsage = (input: UsageFilter) => aggregate(input, "user");
 export const getAgentUsage = (input: UsageFilter) => aggregate(input, "agent");
 export const getWorkflowUsage = (input: UsageFilter) => aggregate(input, "workflow");
 export const getModelUsage = (input: UsageFilter) => aggregate(input, "model");
+export const getModelTierUsage = (input: UsageFilter) => aggregate(input, "tier");
 export const getOperationUsage = (input: UsageFilter) => aggregate(input, "operation");
 export function getDailyUsage(input: UsageFilter) {
   const end = input.end ?? new Date();
@@ -112,4 +114,20 @@ export async function getRequestUsage(userId: string, requestId: string) {
   // Heuristics only. Legitimate workflow steps and retries may repeat metadata.
   return { requestId, aiCallCount, routingCalls, callExplosion: aiCallCount >= 20, repeatedRouting: routingCalls > 1,
     repeatedOperations: repeatedOperations.slice(0, 20), groups: groups.slice(0, 1000), truncated: groups.length > 1000 };
+}
+
+/** Bounded, ownership-scoped reliability aggregates; never reads prompt bodies. */
+export async function getReliabilityMetrics(input: UsageFilter) {
+  const f = filterSchema.parse(input), end = f.end ?? new Date(), start = f.start ?? new Date(end.getTime() - 30 * 86400000);
+  const rows = await db().$queryRaw<Array<{ provider: string; model: string | null; attempts: number; successRate: number; timeoutRate: number; rateLimitRate: number; fallbackRate: number; fallbackSuccessRate: number | null; averageLatencyMs: number }>>(Prisma.sql`
+    SELECT provider, model, COUNT(*)::int AS attempts, AVG(success::int)::float8 AS "successRate",
+      AVG(CASE WHEN "failureClass"='timeout' THEN 1 ELSE 0 END)::float8 AS "timeoutRate",
+      AVG(CASE WHEN "failureClass"='rate-limit' THEN 1 ELSE 0 END)::float8 AS "rateLimitRate",
+      AVG(CASE WHEN "fallbackUsed" THEN 1 ELSE 0 END)::float8 AS "fallbackRate",
+      AVG(success::int) FILTER (WHERE "fallbackUsed")::float8 AS "fallbackSuccessRate", AVG("latencyMs")::float8 AS "averageLatencyMs"
+    FROM "AIUsageRecord" WHERE "userId"=${f.userId} AND "createdAt">=${start} AND "createdAt"<${end}
+    GROUP BY GROUPING SETS ((provider), (provider,model)) ORDER BY provider,model LIMIT 1001
+  `);
+  const events = await db().aIGuardEvent.groupBy({ by: ["type"], where: { userId: f.userId, createdAt: { gte: start, lt: end }, type: { in: ["AI_CIRCUIT_OPEN", "AI_CIRCUIT_RECOVERED", "AI_AUTH_FAILURE"] } }, _count: { _all: true } });
+  return { groups: rows.slice(0, 1000), truncated: rows.length > 1000, events };
 }

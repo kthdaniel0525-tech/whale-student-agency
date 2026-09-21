@@ -1,3 +1,4 @@
+import { assertIntegrationAccess, assertResourceCreation } from "../entitlements/resources";
 import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -74,6 +75,8 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       const target = input.connectedAccountId ? await owned(identity.userId, input.connectedAccountId, tx) : null;
       if (target && target.provider !== provider.id) throw new IntegrationError("INVALID_REQUEST");
       const capabilities = [...new Set([...input.capabilities, ...(target ? provider.capabilitiesFor(target.scopes) : [])])];
+      for (const capability of capabilities) await assertIntegrationAccess(identity.userId, capability, tx);
+      await assertResourceCreation(identity.userId, "account", tx, target?.id);
       const scopes = provider.scopesFor(capabilities);
       await tx.oAuthConnectionSession.create({ data: { id, userId: identity.userId, provider: provider.id, stateHash: hash(state), authenticationSessionHash: identity.sessionHash,
         codeVerifierEncrypted: crypto.encrypt(verifier, credentialContext(identity.userId, provider.id, id, "pkce")), requestedScopes: scopes,
@@ -103,6 +106,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     if (claim.replayed) return { account: await getConnectedAccount(identity.userId, claim.row.resultAccountId!), redirectPath: claim.row.redirectPath, replayed: true };
     if (parameters.error) throw new IntegrationError(parameters.error === "access_denied" ? "ACCESS_DENIED" : "INVALID_RESPONSE");
     if (!parameters.code || parameters.code.length > 4096 || !claim.verifier) throw new IntegrationError("INVALID_REQUEST");
+    for (const capability of provider.capabilitiesFor(claim.row.requestedScopes)) await assertIntegrationAccess(identity.userId, capability);
     const crypto = encryption();
     const verifier = crypto.decrypt(claim.verifier, credentialContext(identity.userId, provider.id, claim.row.id, "pkce"));
     const tokens = await provider.exchangeAuthorizationCode({ code: parameters.code, codeVerifier: verifier, redirectUri: callbackUri(provider.id) });
@@ -121,6 +125,8 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       const current = existing ? await owned(identity.userId, existing.id, tx) : null;
       if (current?.revocationPendingUntil && current.revocationPendingUntil > now()) throw new IntegrationError("CONNECTION_BUSY");
       if (current?.revokedAt && current.revokedAt > claim.row.createdAt) throw new IntegrationError("INVALID_STATE");
+      for (const capability of provider.capabilitiesFor(tokens.scopes!)) await assertIntegrationAccess(identity.userId, capability, tx);
+      await assertResourceCreation(identity.userId, "account", tx, current?.id);
       const id = current?.id ?? randomUUID();
       const refreshTokenEncrypted = tokens.refreshToken ? crypto.encrypt(tokens.refreshToken, credentialContext(identity.userId, provider.id, id, "refresh"))
         : current?.status !== "REVOKED" ? current?.refreshTokenEncrypted ?? null : null;
@@ -142,6 +148,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
    * lock during HTTP. Disconnect can commit immediately; version + lease checks
    * prevent a late refresh from resurrecting or overwriting credentials. */
   const getValidAccessToken = (userId: string, connectedAccountId: string, capability?: IntegrationCapability, providerId?: IntegrationProviderId): Promise<string> => protectIntegration(async () => {
+    await assertIntegrationAccess(userId, capability);
     const deadline = performance.now() + 20000;
     while (performance.now() < deadline) {
       const lease = randomUUID();
@@ -234,9 +241,11 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
   });
 
   const assertProviderAccess = async (userId: string, id: string, capability: IntegrationCapability, provider: IntegrationProviderId, tx: Prisma.TransactionClient = db()) => {
+    await assertIntegrationAccess(userId, capability, tx);
     usable(await owned(userId, id, tx), capability, provider);
   };
   const withProviderClient = <T>(input: { userId: string; connectedAccountId: string; provider: IntegrationProviderId; capability: IntegrationCapability }, operation: (client: IntegrationClient) => Promise<T>): Promise<T> => protectIntegration(async () => {
+    await assertIntegrationAccess(input.userId, input.capability);
     usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
     async function runRequest<R>(send: (token: string) => Promise<R>): Promise<R> {
       const key = { connectedAccountId: input.connectedAccountId, integrationType: input.capability };
@@ -249,6 +258,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
         if (!used.accessTokenEncrypted || encryption().decrypt(used.accessTokenEncrypted, credentialContext(input.userId, used.provider, used.id, "access")) !== token) continue;
         try {
           const result = await send(token);
+          await assertIntegrationAccess(input.userId, input.capability);
           usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
           // Provider access does not mean a complete snapshot was synced. Only
           // the feature's successful commit may advance freshness timestamps.

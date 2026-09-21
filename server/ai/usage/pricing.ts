@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { RAG_EMBEDDING } from "../config";
+import { MODEL_IDS, MODEL_PRICE_ALIASES } from "../routing/catalog";
 import type { AIUsage } from "../types";
 
 const priceSchema = z.object({
@@ -14,16 +15,22 @@ const priceSchema = z.object({
 export const pricingSchema = z.object({ version: z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:/@+-]+$/), models: z.array(priceSchema).max(200) }).strict()
   .refine(value => new Set(value.models.map(p => `${p.provider}:${p.model}`)).size === value.models.length);
 export type AIPricing = z.infer<typeof pricingSchema>;
-// Standard API rates checked 2026-09-19. Sources:
+// Standard API rates checked 2026-09-20. Sources:
 // https://developers.openai.com/api/docs/models/gpt-4.1-mini
+// https://developers.openai.com/api/docs/models/gpt-4.1
+// https://developers.openai.com/api/docs/models/o3
 // https://developers.openai.com/api/docs/models/text-embedding-3-small
 const mini = { provider: "openai", inputPerMillion: 0.4, outputPerMillion: 1.6, cachedInputPerMillion: 0.1 };
 export const DEFAULT_PRICING: AIPricing = {
-  version: "standard-2026-09-19",
+  version: "standard-2026-09-20",
   models: [
-    { ...mini, model: "gpt-4.1-mini" },
-    { ...mini, model: "gpt-4.1-mini-2025-04-14" },
-    { provider: "openai", model: "text-embedding-3-small", inputPerMillion: 0.02, outputPerMillion: 0 },
+    { ...mini, model: MODEL_IDS.baseline },
+    { ...mini, model: MODEL_PRICE_ALIASES.baseline },
+    { provider: "openai", model: MODEL_IDS.strong, inputPerMillion: 2, outputPerMillion: 8, cachedInputPerMillion: 0.5 },
+    { provider: "openai", model: MODEL_IDS.reasoning, inputPerMillion: 2, outputPerMillion: 8, cachedInputPerMillion: 0.5 },
+    { provider: "openai", model: MODEL_PRICE_ALIASES.strong, inputPerMillion: 2, outputPerMillion: 8, cachedInputPerMillion: 0.5 },
+    { provider: "openai", model: MODEL_PRICE_ALIASES.reasoning, inputPerMillion: 2, outputPerMillion: 8, cachedInputPerMillion: 0.5 },
+    { provider: "openai", model: MODEL_IDS.embedding, inputPerMillion: 0.02, outputPerMillion: 0 },
     // Zero external API token charge; this does not estimate local compute cost.
     { provider: "local", model: RAG_EMBEDDING.id, inputPerMillion: 0, outputPerMillion: 0 },
   ],

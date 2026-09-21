@@ -2,6 +2,29 @@ export const AI_OPERATIONS = ["text-generation", "structured-output", "streaming
 export type AIOperation = typeof AI_OPERATIONS[number];
 export const AI_SOURCES = ["rag-document", "rag-query", "memory-index", "memory-query", "conversation-index", "conversation-query", "conversation-summary"] as const;
 export type AIUsageContext = {
+  guardProfile?: import("../guardrails/config").BudgetProfile;
+  backgroundJobId?: string;
+  workflowStepId?: string;
+  guardFeature?: string;
+  guardWorkflowCalls?: number;
+  guardWorkflowSteps?: number;
+  guardQualityFloorTier?: ModelTier;
+  guardInputTokens?: number;
+  promptVersion?: string;
+  routingVersion?: string;
+  contextVersion?: string;
+  selectedModel?: string;
+  selectedTier?: ModelTier;
+  routingComplexity?: TaskComplexity;
+  routingReasonCode?: string;
+  routingMethod?: ModelRoutingDecision["routingMethod"];
+  fallbackUsed?: boolean;
+  primaryProvider?: string;
+  primaryModel?: string;
+  attemptNumber?: number;
+  fallbackDepth?: number;
+  fallbackFromProvider?: string;
+  fallbackFromModel?: string;
   /** Trusted server metadata only; never accepted from request JSON. */
   userId?: string;
   requestId?: string;
@@ -21,3 +44,4 @@ export type AIUsageContext = {
   historicalMessageCount?: number;
   estimatedConversationTokens?: number;
 };
+import type { ModelTier, TaskComplexity, ModelRoutingDecision } from "../routing/types";

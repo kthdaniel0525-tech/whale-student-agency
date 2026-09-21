@@ -1,5 +1,11 @@
+import { lockEntitlementUser } from "../entitlements/service";
+import { assertWorkflowAllowance } from "../entitlements/resources";
+import { EntitlementError } from "../entitlements/errors";
+import { AI_GUARD_CODES } from "../ai/errors";
 import "server-only";
-import { withAIUsageContext } from "../ai/usage/context";
+import { captureUsageContext, withAIUsageContext } from "../ai/usage/context";
+import { guardrails } from "../ai/guardrails/service";
+import { getGuardrailConfig } from "../ai/guardrails/config";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "../db/client";
@@ -32,16 +38,28 @@ export class WorkflowEngine {
   async run(definition: WorkflowDefinition, input: WorkflowInput, initial: WorkflowContext, headers: Headers): Promise<WorkflowResult> {
     const identity = await workflowIdentity(headers);
     const userId = identity.userId;
+    return withAIUsageContext({ userId, workflowId: definition.id, guardProfile: "WORKFLOW" }, async () => {
+    await assertWorkflowAllowance(userId, definition.id);
+    await guardrails.admit(captureUsageContext(), true);
     const scope = initial.careerPreparation ? createHash("sha256").update(JSON.stringify([initial.careerPreparation.targetRole, initial.careerPreparation.targetIndustry, initial.careerPreparation.targetCompanies, initial.careerPreparation.timeline, initial.careerPreparation.weeklyAvailableMinutes, initial.careerPreparation.selectedProjectIds, initial.careerPreparation.sourceFingerprint, initial.careerPreparation.provided, initial.goal])).digest("hex") : initial.assignment ? createHash("sha256").update(JSON.stringify([initial.assignment.id, initial.assignment.updatedAt, initial.assignment.documents, initial.assignment.path, initial.assignment.signals.availableMinutes, initial.assignment.specificQuestion, initial.assignment.userWork, initial.goal])).digest("hex") : initial.lecture ? createHash("sha256").update(JSON.stringify([initial.courseId, initial.lecture.documents.map((d) => [d.id, d.updatedAt]).sort((a, b) => a[0].localeCompare(b[0])), initial.lecture.mode, initial.lecture.topicFocus, initial.lecture.requestedDifficulty, initial.lecture.availableMinutes, initial.goal.trim().toLowerCase().replace(/\s+/g, " ")])).digest("hex") : initial.recovery?.topicId ?? initial.exam?.id;
     if (!scope) throw new WorkflowError("INVALID_REQUEST");
     const activeKey = `${userId}:${definition.id}:${scope}`;
     let run;
     try {
-      run = await db().workflowRun.create({ data: {
+      const admission = await db().$transaction(async tx => {
+        await lockEntitlementUser(tx, userId);
+        const existing = await tx.workflowRun.findFirst({ where: { activeKey, userId } });
+        if (existing) return { run: existing, replay: true };
+        await assertWorkflowAllowance(userId, definition.id, tx, true);
+        return { replay: false, run: await tx.workflowRun.create({ data: {
         userId, workflowId: definition.id, activeKey, input: json(input), context: json(initial),
         steps: { create: definition.steps.map((step, position) => ({ stepId: step.id, agentId: step.agentId, position })) },
-      } });
+      } }) };
+      });
+      if (admission.replay) return this.get(admission.run.id, headers);
+      run = admission.run;
     } catch (error) {
+      if (error instanceof EntitlementError) throw error;
       if (error instanceof Error && "code" in error && error.code === "P2002") {
         const existing = await db().workflowRun.findFirst({ where: { activeKey, userId }, select: { id: true } });
         if (existing) return this.get(existing.id, headers);
@@ -49,6 +67,7 @@ export class WorkflowEngine {
       throw new WorkflowError("STORAGE_FAILURE");
     }
     return this.advance(definition, run.id, identity.headers);
+    });
   }
 
   /** Explicit continuation only. A compare-and-set claim prevents simultaneous
@@ -60,6 +79,7 @@ export class WorkflowEngine {
     const run = await db().workflowRun.findFirst({ where: { id, userId } });
     if (!run) throw new WorkflowError("RUN_NOT_FOUND");
     if (run.workflowId !== definition.id) throw new WorkflowError("INVALID_REQUEST");
+    await assertWorkflowAllowance(userId, definition.id);
     const saved = run.context as unknown as WorkflowContext;
     if (expectedInput && (saved.waitingFor?.kind !== expectedInput.kind || saved.waitingFor.referenceId !== expectedInput.referenceId)) return this.get(id, headers);
     const claimed = await db().workflowRun.updateMany({ where: { id, userId, status: "WAITING_FOR_INPUT", updatedAt: run.updatedAt }, data: { status: "RUNNING" } });
@@ -70,7 +90,10 @@ export class WorkflowEngine {
 
   private async advance(definition: WorkflowDefinition, id: string, headers: Headers,
     prepare?: (context: Readonly<WorkflowContext>) => Promise<NonNullable<StepOutput["patch"]>>) {
-    return withAIUsageContext({ workflowId: definition.id, workflowRunId: id }, () => this.advanceScoped(definition, id, headers, prepare));
+    const config = getGuardrailConfig();
+    return withAIUsageContext({ workflowId: definition.id, workflowRunId: id, guardProfile: "WORKFLOW",
+      guardWorkflowCalls: Math.min(config.profiles.WORKFLOW.maxAICalls, definition.steps.length * definition.maxAgentCalls * (1 + definition.maxRetries) + config.workflowHelperCalls),
+      guardWorkflowSteps: definition.maxSteps }, () => this.advanceScoped(definition, id, headers, prepare));
   }
 
   private async advanceScoped(definition: WorkflowDefinition, id: string, headers: Headers,
@@ -94,7 +117,11 @@ export class WorkflowEngine {
         if (JSON.stringify(context).length > 24000) throw new WorkflowError("INVALID_RESPONSE");
         await db().workflowRun.updateMany({ where: { id, userId, status: "RUNNING" }, data: { context: json(context) } });
       }
-      if (definition.steps.length > definition.maxSteps || definition.maxSteps > 8) throw new WorkflowError("LIMIT_EXCEEDED");
+      if (definition.steps.length > definition.maxSteps || definition.maxSteps > 8 || definition.maxSteps < 1 || !Number.isInteger(definition.maxSteps)
+        || !Number.isInteger(definition.maxRetries) || definition.maxRetries > 1 || definition.maxRetries < 0
+        || !Number.isInteger(definition.maxAgentCalls) || definition.maxAgentCalls < 1 || definition.maxAgentCalls > 3
+        || !Number.isFinite(definition.maxDurationMs) || definition.maxDurationMs <= 0 || definition.maxDurationMs > 300000
+        || new Set(definition.steps.map(s => s.id)).size !== definition.steps.length) throw new WorkflowError("LIMIT_EXCEEDED");
       for (const step of definition.steps) {
         if (run.steps.some((saved) => saved.stepId === step.id && ["COMPLETED", "SKIPPED", "FAILED"].includes(saved.status))) continue;
         const current = await db().workflowRun.findFirstOrThrow({ where: { id: run.id, userId }, select: { status: true } });
@@ -106,7 +133,9 @@ export class WorkflowEngine {
           await db().workflowStepRun.updateMany({ where, data: { status: "SKIPPED", inputSummary: step.purpose, outputSummary: condition.reason.slice(0, 800), completedAt: new Date() } });
           continue;
         }
+        await assertWorkflowAllowance(userId, definition.id);
         const mapped = step.input(structuredClone(context));
+        await guardrails.step(captureUsageContext({ userId, workflowId: definition.id, workflowRunId: run.id }), step.id, definition.maxSteps);
         if (!mapped.request?.trim() || mapped.request.length > 1000) throw new WorkflowError("INVALID_REQUEST");
         await db().workflowRun.updateMany({ where: { id: run.id, userId, status: "RUNNING" }, data: { currentStep: step.id } });
         let completed = false;
@@ -120,7 +149,7 @@ export class WorkflowEngine {
           try {
             let output: StepOutput;
             try {
-              output = await withAIUsageContext({ userId, workflowId: definition.id, workflowRunId: run.id, agentId: step.agentId }, () => this.execute(step, mapped, structuredClone(context), identity.headers));
+              output = await withAIUsageContext({ userId, workflowId: definition.id, workflowRunId: run.id, agentId: step.agentId, workflowStepId: step.id }, () => this.execute(step, mapped, structuredClone(context), identity.headers));
             } finally {
               // A domain operation can fail after committing a write. Optional
               // continuation must also discard potentially stale aggregates.
@@ -141,6 +170,7 @@ export class WorkflowEngine {
             break;
           } catch (error) {
             const failure = workflowError(error);
+            if (failure.code === "LIMIT_EXCEEDED" || AI_GUARD_CODES.some(code => code === failure.code)) throw failure;
             const transient = failure.code === "RATE_LIMIT" || failure.code === "PROVIDER_FAILURE";
             if (transient && attempt < definition.maxRetries) continue;
             const policy = step.failurePolicy ?? definition.failurePolicy;
@@ -229,7 +259,7 @@ export class WorkflowEngine {
       ...(lecture ? { lectureStudy: { mode: lecture.mode, estimatedEffort: lecture.effort, coverage: "Based on retrieved passages from the selected materials; full lecture coverage is not guaranteed.", summary: lectureSummary }, waitingFor: run.status === "WAITING_FOR_INPUT" ? context.waitingFor : null } : {}),
       ...(recovery ? { recovery, waitingFor: run.status === "WAITING_FOR_INPUT" ? context.waitingFor : null } : {}),
       runId: run.id, workflowId: run.workflowId as WorkflowResult["workflowId"], status: run.status.toLowerCase().replaceAll("_", "-") as WorkflowResult["status"],
-      summary: careerResult ? `Career preparation is ${run.status.toLowerCase().replaceAll("_", " ")}. ${careerResult.nextAction}` : assignmentResult ? `Assignment support is ${run.status.toLowerCase().replaceAll("_", " ")}. ${assignmentResult.nextAction}` : lecture ? lectureSummary ? `Lecture study completed: ${lectureSummary.quizScore.percentage}% on the graded quiz. ${lectureSummary.recommendedNextAction}` : run.status === "WAITING_FOR_INPUT" ? "Notes and practice are ready. Complete the saved quiz to evaluate your learning." : `Lecture study is ${run.status.toLowerCase()}. Completed work remains available.` : recovery ? recovery.improvementSummary : run.status === "COMPLETED" ? "Exam preparation is ready. Follow the study plan and complete the selected practice." : `Exam preparation is ${run.status.toLowerCase()}.`,
+      summary: careerResult ? `Career preparation is ${run.status.toLowerCase().replaceAll("_", " ")}. ${careerResult.nextAction}` : assignmentResult ? `Assignment support is ${run.status.toLowerCase().replaceAll("_", " ")}. ${assignmentResult.nextAction}` : lecture ? lectureSummary ? `Lecture study completed: ${lectureSummary.quizScore.percentage}% on the graded quiz. ${lectureSummary.recommendedNextAction}` : run.status === "WAITING_FOR_INPUT" ? "Notes and practice are ready. Complete the saved quiz to evaluate your learning." : `Lecture study is ${run.status.toLowerCase()}. Completed work remains available.` : recovery ? recovery.improvementSummary : run.status === "COMPLETED" ? "Exam preparation is ready. Follow the study plan and complete the selected practice." : `Exam preparation is ${run.status.toLowerCase()}. Completed work remains available.`,
       completedSteps: run.steps.filter((step) => step.status === "COMPLETED").map((step) => step.stepId),
       steps: run.steps.map((step) => ({ stepId: step.stepId, agentId: step.agentId, status: step.status.toLowerCase(), attempts: step.attempts, inputSummary: step.inputSummary, outputSummary: step.outputSummary, errorCode: step.errorCode })),
       outputs: { ...outputs, ...(recovery || lecture || assignment || career ? {} : { studyPlanId: context.studyPlanId }), ...(lecture ? { sources: lecture.sources } : {}), quizId: context.quizId }, warnings: run.warnings, errorCode: run.errorCode,

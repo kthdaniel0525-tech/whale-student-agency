@@ -69,6 +69,7 @@ export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 /** Metadata only. Registration does not imply an executable implementation exists. */
 export interface Agent<Extension extends string = never> {
   readonly id: AgentId<Extension>;
+  readonly promptVersion?: string;
   readonly name: string;
   readonly description: string;
   readonly capabilities: readonly AgentCapability[];

@@ -1,3 +1,5 @@
+import { assertEntitlement } from "../entitlements/service";
+import { EntitlementError } from "../entitlements/errors";
 import "server-only";
 import { withAIUsageContext } from "../ai/usage/context";
 import { randomUUID } from "node:crypto";
@@ -81,8 +83,9 @@ export async function processNextDocument(
     await Promise.race([
       deadline,
       (async () => {
+        await assertEntitlement(claim.userId, "academic.documents");
         const bytes = await storage.get(claim.storageKey);
-        const prepared = await withAIUsageContext({ userId: claim.userId, source: "rag-document" }, () => prepareDocument(bytes, claim.fileType, provider, checkDeadline));
+        const prepared = await withAIUsageContext({ userId: claim.userId, requestId: `document:${claim.id}:${token}`, backgroundJobId: `document:${claim.id}`, guardProfile: "BACKGROUND", source: "rag-document" }, () => prepareDocument(bytes, claim.fileType, provider, checkDeadline));
         await db().$transaction(
           async (tx) => {
             const rows = await tx.$queryRaw<
@@ -120,7 +123,7 @@ export async function processNextDocument(
       },
       data: {
         processingStatus: "FAILED",
-        processingError:
+        processingError: e instanceof EntitlementError ? e.message :
           e instanceof DocumentError
             ? e.message
             : "Processing could not finish. Check the document service and try again.",

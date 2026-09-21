@@ -3,6 +3,7 @@
 import { Bot, Sparkles } from "lucide-react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageAvatar, MessageContent, MessageHeader } from "@/components/ui/message";
+import { MessageFeedback } from "./message-feedback";
 import { AIResultRenderer } from "./result-renderer";
 import type { AssistantAction, AssistantMessage } from "./types";
 
@@ -27,6 +28,7 @@ export function AssistantMessageView({ message, onWorkflowResume, onQuizComplete
           <BubbleContent className={`${user ? "" : "w-full bg-card p-4 sm:p-5"} whitespace-pre-wrap`}>{message.content}</BubbleContent>
         </Bubble>
         {!user && presentation && <AIResultRenderer result={presentation} onWorkflowResume={onWorkflowResume} onQuizComplete={onQuizComplete} onAction={onAction} actionBusy={actionBusy} />}
+        {!user && message.metadata?.workspaceVisible === true && presentation?.kind !== "error" && <MessageFeedback key={message.id} messageId={message.id} />}
       </MessageContent>
       {user && <MessageAvatar className="h-9 w-9"><Bot size={17} /></MessageAvatar>}
     </Message>

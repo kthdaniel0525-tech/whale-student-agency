@@ -1,5 +1,10 @@
+import { checkAIUsageAllowance } from "../entitlements/usage";
 import "server-only";
 import { z } from "zod";
+import { captureUsageContext, withAIUsageContext } from "../ai/usage/context";
+import { claimAIRequest } from "../ai/guardrails/requests";
+import { guardrails } from "../ai/guardrails/service";
+import { AIError } from "../ai/errors";
 import { auth } from "../auth/config";
 import { db } from "../db/client";
 import {
@@ -283,6 +288,12 @@ export async function executeAssistantRequest(
   headers: Headers,
   options: { execute?: typeof handleUserAIRequest } = {},
 ): Promise<AssistantRequestResponse> {
+  return guardedAssistant(raw, headers, false, requested => executeAssistantRequestCore(requested, headers, options)) as Promise<AssistantRequestResponse>;
+}
+
+async function executeAssistantRequestCore(
+  raw: unknown, headers: Headers, options: { execute?: typeof handleUserAIRequest } = {},
+): Promise<AssistantRequestResponse> {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) throw new AssistantWorkspaceError("INVALID_REQUEST");
   const requested = parsed.data;
@@ -377,6 +388,7 @@ export async function executeAssistantRequest(
 }
 
 function streamError(error: unknown): string {
+  if (error instanceof AIError) return error.message;
   const code = error instanceof Error && "code" in error ? String(error.code) : "";
   if (["CONFIGURATION", "AUTHENTICATION", "RATE_LIMIT", "PROVIDER_FAILURE", "INVALID_RESPONSE", "SOURCE_CONTEXT_UNAVAILABLE", "CONVERSATION_NOT_FOUND", "CONTEXT_FAILURE"].includes(code) && error instanceof Error) return error.message;
   return "The AI request could not be completed. Please try again.";
@@ -384,19 +396,24 @@ function streamError(error: unknown): string {
 
 function ndjsonStream(run: (send: (value: unknown) => void) => Promise<void>) {
   const encoder = new TextEncoder();
+  let cancelled = false;
   return new Response(new ReadableStream({
     async start(controller) {
-      const send = (value: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+      const send = (value: unknown) => { if (cancelled) throw new AIError("CANCELLED"); controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`)); };
       try { await run(send); }
-      catch (error) { send({ type: "error", message: streamError(error) }); }
-      finally { controller.close(); }
+      catch (error) { if (!cancelled) send({ type: "error", message: streamError(error) }); }
+      finally { if (!cancelled) controller.close(); }
     },
+    cancel() { cancelled = true; },
   }), { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
 }
 
 /** Uses provider streaming only for ordinary Tutor/Notes text. Structured Agents
  * and Workflows retain their validated execution path and emit one final event. */
 export async function streamAssistantRequest(raw: unknown, headers: Headers): Promise<Response> {
+  return guardedAssistant(raw, headers, true, requested => streamAssistantRequestCore(requested, headers)) as Promise<Response>;
+}
+async function streamAssistantRequestCore(raw: unknown, headers: Headers): Promise<Response> {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) throw new AssistantWorkspaceError("INVALID_REQUEST");
   const requested = parsed.data;
@@ -407,7 +424,7 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
   if (requested.courseId && conversation.courseId && requested.courseId !== conversation.courseId) throw new AssistantWorkspaceError("CONTEXT_MISMATCH");
   const replay = conversation.messages.some((message) => message.role === "assistant" && message.turnId === requested.turnId && message.metadata?.workspaceVisible === true);
   if (replay) return ndjsonStream(async (send) => {
-    send({ type: "result", data: await executeAssistantRequest({ ...requested, conversationId }, headers) });
+    send({ type: "result", data: await executeAssistantRequestCore({ ...requested, conversationId }, headers) });
   });
 
   const decision = await new IntelligentDispatcher().dispatch({ ...requested, conversationId, turnId: undefined }, headers);
@@ -452,7 +469,7 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
     };
     send({
       type: "result",
-      data: await executeAssistantRequest(
+      data: await executeAssistantRequestCore(
         { ...requested, conversationId },
         headers,
         { execute: executeResolved },
@@ -475,11 +492,11 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
       conversation: { id: conversationId },
     }, headers);
     let execution;
-    while (true) {
+    try { while (true) {
       const next = await iterator.next();
       if (next.done) { execution = next.value; break; }
       send({ type: "delta", text: next.value.text });
-    }
+    } } finally { await iterator.return(undefined as never); }
     const userMessage = await appendConversationMessage({ conversationId, role: "user", content: requested.request, turnId: requested.turnId, metadata: metadata({ ...(requested.courseId ? { courseId: requested.courseId } : {}) }) }, headers);
     const sources = [...(execution.sources ?? [])];
     const sourceRefs = serializeSources(sources);
@@ -500,6 +517,57 @@ export async function streamAssistantRequest(raw: unknown, headers: Headers): Pr
     const data: AssistantRequestResponse = { conversation: publicConversation(updated), userMessage: publicMessage(userMessage), assistantMessage: publicMessage(assistantMessage, presentation) };
     send({ type: "result", data });
   });
+}
+
+async function guardedAssistant(raw: unknown, headers: Headers, streaming: boolean,
+  execute: (input: z.infer<typeof requestSchema>) => Promise<Response | AssistantRequestResponse>) {
+  const parsed = requestSchema.safeParse(raw);
+  if (!parsed.success) throw new AssistantWorkspaceError("INVALID_REQUEST");
+  const input = parsed.data;
+  const session = await auth().api.getSession({ headers: new Headers(headers), query: { disableRefresh: true } });
+  if (!session) throw new AssistantWorkspaceError("UNAUTHENTICATED");
+  const userId = session.user.id;
+  const context = captureUsageContext({ userId, ...(input.preferredAgentId ? { agentId: input.preferredAgentId } : {}), ...(input.preferredWorkflowId ? { guardProfile: "WORKFLOW" as const, workflowId: input.preferredWorkflowId } : {}) });
+  await checkAIUsageAllowance(userId, context);
+  // Normalize only set-like references; all meaningful constraints remain in the hash.
+  const normalized = { ...input, documentIds: input.documentIds?.slice().sort(), projectIds: input.projectIds?.slice().sort() };
+  const claim = await claimAIRequest(context, input.turnId, normalized);
+  if (claim.replay) {
+    if (!claim.conversationId) throw new AIError("AI_DUPLICATE_REQUEST");
+    const conversation = await getAssistantConversation(claim.conversationId, headers);
+    const rows = await db().conversationMessage.findMany({ where: { userId, conversationId: claim.conversationId, turnId: input.turnId, role: { in: ["USER", "ASSISTANT"] } } });
+    const messages = rows.map(row => conversation.messages.find(m => m.id === row.id) ?? {
+      id: row.id, turnId: row.turnId, role: row.role.toLowerCase() as "user" | "assistant", content: row.content, agentId: row.agentId,
+      createdAt: row.createdAt.toISOString(), metadata: row.metadata as AssistantMessage["metadata"],
+    });
+    const userMessage = messages.find(m => m.role === "user"), assistantMessage = messages.find(m => m.role === "assistant");
+    if (!userMessage || !assistantMessage) throw new AIError("AI_DUPLICATE_REQUEST");
+    const data = { conversation, userMessage, assistantMessage };
+    return streaming ? ndjsonStream(async send => { send({ type: "result", data }); }) : data;
+  }
+  const complete = async (conversationId?: string) => {
+    try {
+      const savedId = conversationId ?? (await db().conversationMessage.findFirst({ where: { userId, turnId: input.turnId, role: "ASSISTANT", metadata: { path: ["workspaceVisible"], equals: true } }, select: { conversationId: true } }))?.conversationId;
+      await claim.complete(savedId);
+    } catch {
+      // Saved output stays usable when the guard-store completion write fails.
+      // The original claim still prevents automatic duplicate execution.
+      await guardrails.emit({ context, type: "AI_GUARD_STORAGE_UNAVAILABLE" }).catch(() => {});
+    }
+  };
+  try {
+    await guardrails.admit(context);
+    const result = await withAIUsageContext(context, () => execute(input));
+    if (!(result instanceof Response)) { await complete(result.conversation.id); return result; }
+    const reader = result.body!.getReader();
+    return new Response(new ReadableStream({
+      async pull(controller) {
+        try { const next = await reader.read(); if (next.done) { await complete(); controller.close(); } else controller.enqueue(next.value); }
+        catch (error) { await claim.complete().catch(() => {}); controller.error(error); }
+      },
+      async cancel(reason) { await reader.cancel(reason); await claim.complete().catch(() => {}); },
+    }), { status: result.status, headers: result.headers });
+  } catch (error) { await claim.complete().catch(() => {}); throw error; }
 }
 
 export async function getAssistantWorkflowMessage(runId: string, headers: Headers): Promise<AssistantMessage> {
@@ -593,10 +661,10 @@ export async function updateAssistantStudyTask(taskId: string, rawStatus: unknow
   return createStudyPlannerAgentService().updateTaskStatus(taskId, status.data, headers);
 }
 
-export type AssistantWorkspaceErrorCode = "INVALID_REQUEST" | "CONTEXT_MISMATCH" | "NOT_FOUND";
+export type AssistantWorkspaceErrorCode = "INVALID_REQUEST" | "CONTEXT_MISMATCH" | "NOT_FOUND" | "UNAUTHENTICATED";
 export class AssistantWorkspaceError extends Error {
   constructor(readonly code: AssistantWorkspaceErrorCode) {
-    super({ INVALID_REQUEST: "Check your message and selected context.", CONTEXT_MISMATCH: "Start a new chat to use a different course.", NOT_FOUND: "This workspace item is no longer available." }[code]);
+    super({ UNAUTHENTICATED: "Sign in to continue.", INVALID_REQUEST: "Check your message and selected context.", CONTEXT_MISMATCH: "Start a new chat to use a different course.", NOT_FOUND: "This workspace item is no longer available." }[code]);
     this.name = "AssistantWorkspaceError";
   }
 }

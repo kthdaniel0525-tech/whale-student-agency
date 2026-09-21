@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -8,15 +9,16 @@ import { academicIntegrationService } from "../academic-integrations/service";
 import { academicProviderRegistry, type AcademicProviderRegistry } from "../academic-integrations/registry";
 import { getBackgroundJobPublisher } from "./client";
 import { getBackgroundJobConfig } from "./config";
-import type { BackgroundJob } from "./types";
+import type { BackgroundJob, BackgroundJobResult } from "./types";
 const retryPolicy = { limit: 2, delaySeconds: 60, maximumDelaySeconds: 300, exponentialBackoff: true } as const;
 const payloadSchema = z.object({ version: z.literal(1), trackingId: z.string().max(100).optional(), connectedAccountId: z.string().min(1).max(100), externalCourseId: z.string().min(1).max(200) }).strict();
 export function createExternalCourseSyncJob(service = academicIntegrationService): BackgroundJob<z.infer<typeof payloadSchema>> {
     return { name: "sync-external-course", version: 1, payloadSchema, retryPolicy, timeoutSeconds: 600, priority: "normal", executionScope: "system", concurrency: { scope: "global", limit: 1 }, debounceSeconds: 30,
-        async handler({ payload, signal }) {
+        async handler({ payload, signal }): Promise<BackgroundJobResult> {
             const account = await db().connectedAccount.findUnique({ where: { id: payload.connectedAccountId }, select: { userId: true } });
             if (!account)
                 return { skipped: true };
+            if (!await hasEntitlement(account.userId, "integration.lms")) return { skipped: true, reason: "ENTITLEMENT_REQUIRED" };
             return service.syncExternalCourse(account.userId, payload.connectedAccountId, payload.externalCourseId, signal);
         }
     };
@@ -43,6 +45,7 @@ export function createAcademicSyncSweep(service = academicIntegrationService, re
                 if (signal.aborted)
                     break;
                 try {
+                    if (!await hasEntitlement(row.userId, "integration.lms")) continue;
                     await service.requestSync(row.userId, row.courseId, true);
                     enqueued++;
                 }

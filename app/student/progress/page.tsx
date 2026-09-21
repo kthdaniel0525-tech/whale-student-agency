@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { hasEntitlement } from "@/server/entitlements/service";
 import { Suspense } from "react";
 import { headers } from "next/headers";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,6 +11,7 @@ export const dynamic = "force-dynamic";
 
 async function ProgressContent() {
   const { user } = await requirePageUser();
+  if (!await hasEntitlement(user.id, "academic.progress")) return <section className="panel"><h1>Learning progress</h1><p className="mt-3">Progress insights are unavailable with your current access. Your quiz results and academic data are preserved.</p><Link className="mt-3 inline-block text-primary underline" href="/plans">View plans</Link></section>;
   const data = await getStudentProgress(user.id, await headers());
   return <ProgressExperience initial={data} />;
 }

@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import type { AvailabilityContext, ExternalCalendarEvent } from "@/lib/student/calendar/types";
 import { db } from "../db/client";
@@ -29,6 +30,7 @@ export function createAvailabilityService(calendar: ReturnType<typeof createGoog
             db().calendarIntegrationPreference.findMany({ where: { userId: input.userId, enabledForAvailability: true, connectedAccount: { userId: input.userId, status: { not: "REVOKED" } } }, include: { connectedAccount: { select: { provider: true, status: true } } } }),
         ]);
         const timezone = validTimezone(profile?.timezone);
+        if (!await hasEntitlement(input.userId, "integration.calendar")) return { status: "unavailable", timezone, days: [], checkedAt: now.toISOString(), assumptions: ["Calendar access is unavailable with your current access. Stated study time and academic deadlines remain available; view plans to enable calendar scheduling."] };
         const assumptions = ["Study hours are 09:00–22:00 in your application timezone, excluding enabled quiet hours; daily study budgets still apply.", "Ordinary all-day events do not block study unless enabled for that calendar; out-of-office events do."];
         if (!selected.length)
             return { status: "not-connected", timezone, days: [], checkedAt: now.toISOString(), assumptions: [] };

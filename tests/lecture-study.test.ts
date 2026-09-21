@@ -1,4 +1,7 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
+import { workflowObservation } from "@/server/ai/evaluation/observations";
 import "dotenv/config";
+import { guardedWorkflowFixture } from "./guard-fixture";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { auth } from "@/server/auth/config";
@@ -45,7 +48,7 @@ async function fixture(options: { user?: Actor; learning?: boolean; documents?: 
 }
 function boundary(options: { fail?: string; invalidCitation?: boolean; noFocus?: boolean; objectiveOnly?: boolean; unrelatedTopic?: boolean; gate?: (name: string) => Promise<void> } = {}) {
   const calls: string[] = [], requests: AIStructuredRequest<unknown>[] = [];
-  const provider: AIProvider = {
+  const transport: AIProvider = {
     async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
       calls.push(request.schemaName); requests.push(request as AIStructuredRequest<unknown>);
       if (options.gate) await options.gate(request.schemaName);
@@ -73,6 +76,7 @@ function boundary(options: { fail?: string; invalidCitation?: boolean; noFocus?:
       return { id: "lecture-fixture", model: "fixture", text: JSON.stringify(data), data: data as T };
     }, generateText() { throw new Error("The study workflow uses structured existing-agent execution."); }, streamText() { throw new Error("No streaming framework."); }, generateEmbedding() { throw new Error("Reuse real local RAG."); },
   };
+  const provider = guardedWorkflowFixture(transport);
   const getProvider = () => provider;
   return { calls, requests, provider, service: new WorkflowService({ getProvider, conversationEmbeddingProvider: null }), quiz: new QuizAgentService(createStudentAgentRegistry(), { getProvider }) };
 }
@@ -142,6 +146,7 @@ describe.sequential("Lecture Study with actual auth, selected RAG, agents, gradi
     const done = await new WorkflowService({ getProvider: () => ai.provider }).resumeWorkflow({ runId: run.runId, quizAttemptId }, owner.headers);
     expect(done, JSON.stringify(done)).toMatchObject({ status: "completed", completedSteps: ["notes", "tutor", "quiz", "learning"], lectureStudy: { summary: { quizScore: { percentage: 100, correctAnswers: 6, totalQuestions: 6 }, recommendedWorkflowId: "weak-topic-recovery" } } });
     const summary = done.lectureStudy!.summary!;
+    expect(evaluateDeterministic({ profile: "workflow", request: "Evaluate observed workflow", output: workflowObservation(done), expected: { expectedStatus: "completed", maximumCalls: 12, maximumTutorCalls: 2, maximumQuizCalls: 2, requiredTerms: ["notes"] } }).passed).toBe(true);
     expect(summary.conceptsStudied).toEqual(["Mathematical Induction", "Strong Induction"]);
     expect(summary.insufficientEvidenceTopics).toContain("Strong Induction");
     expect(summary.improvedTopics).toContainEqual(expect.objectContaining({ topic: "Mathematical Induction", previousMastery: 45 }));

@@ -40,7 +40,16 @@ try {
       "OAuthConnectionSession",
       "IntegrationSyncState",
       "User",
+      "Plan",
+      "UserSubscription",
+      "UserEntitlementOverride",
+      "EntitlementEvent",
+      "EntitlementUsageAdmission",
       "AIUsageRecord",
+      "AIEvaluationRecord",
+      "AIUserFeedback",
+      "AIGuardState",
+      "AIGuardEvent",
       "Profile",
       "Course",
       "Assignment",
@@ -88,7 +97,7 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 27)
+    if (migration.rows[0].count !== 33)
       throw new Error("Unexpected applied migration count.");
     const integrationColumns = await verify.query(`SELECT column_name FROM information_schema.columns
       WHERE table_schema='public' AND ((table_name='ConnectedAccount' AND column_name IN ('refreshLeaseToken','refreshLeaseUntil','deniedCapabilities'))
@@ -126,7 +135,15 @@ try {
     if (trigger.rows.length !== 1)
       throw new Error("Missing durable file-deletion trigger.");
     const usageIndexes = await verify.query(`SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename='AIUsageRecord'`);
-    if (usageIndexes.rows.length !== 7) throw new Error("Missing AI usage identity or query indexes.");
+    if (usageIndexes.rows.length !== 8) throw new Error("Missing AI usage identity or query indexes.");
+    const routingFields = await verify.query(`SELECT column_name FROM information_schema.columns
+      WHERE table_name='AIUsageRecord' AND column_name IN ('selectedModel','selectedTier','routingComplexity','routingReasonCode','routingMethod','fallbackUsed') AND is_nullable='YES'`);
+    if (routingFields.rows.length !== 6) throw new Error("Missing backward-compatible model routing fields.");
+    const reliabilityFields = await verify.query(`SELECT column_name FROM information_schema.columns
+      WHERE table_name='AIUsageRecord' AND column_name IN ('primaryProvider','primaryModel','attemptNumber','fallbackDepth','fallbackFromProvider','fallbackFromModel','finalProvider','failureClass','streamStarted','tokensEmitted') AND is_nullable='YES'`);
+    if (reliabilityFields.rows.length !== 10) throw new Error("Missing backward-compatible reliability fields.");
+    const healthEventFields = await verify.query(`SELECT column_name FROM information_schema.columns WHERE table_name='AIGuardEvent' AND column_name IN ('provider','model') AND is_nullable='YES'`);
+    if (healthEventFields.rows.length !== 2) throw new Error("Missing health event attribution.");
     const usageFields = await verify.query(`SELECT column_name FROM information_schema.columns WHERE table_name='AIUsageRecord' AND column_name IN ('usageSource','pricingVersion','estimatedCostUsd','requestId')`);
     if (usageFields.rows.length !== 4) throw new Error("Missing AI usage metadata or pricing snapshot.");
     console.log(

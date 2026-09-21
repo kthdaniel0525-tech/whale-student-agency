@@ -31,6 +31,7 @@ export type ReminderRefreshEnqueueOptions = RecommendationRefreshEnqueueOptions;
 
 type EnqueueDependencies = {
   publisher?: BackgroundJobPublisher;
+  payload?: Record<string, string>;
 };
 
 function reference(
@@ -74,7 +75,7 @@ export async function enqueueNotificationDelivery(userId: string, options: Recom
   return enqueueTrackedUserJob(deliverUserNotificationsJob, userId, options, dependencies);
 }
 
-async function enqueueTrackedUserJob<Payload extends {
+export async function enqueueTrackedUserJob<Payload extends {
   version: number;
   trackingId: string;
   userId: string;
@@ -126,7 +127,7 @@ async function enqueueTrackedUserJob<Payload extends {
       });
       const acceptedId = await publisher.sendDebounced(
         definition.name,
-        { version: definition.version, trackingId: run.id, userId } as Payload,
+        definition.payloadSchema.parse({ ...dependencies.payload, version: definition.version, trackingId: run.id, userId }),
         {
           id: queueJobId,
           priority: BACKGROUND_JOB_PRIORITIES[options.priority ?? definition.priority],

@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { STUDENT_AGENT_IDS } from "../agents/types";
 import { db } from "../db/client";
@@ -263,6 +264,7 @@ export async function evaluateReminders(
   try {
     const owner = await db().user.findUnique({ where: { id: userId }, select: { id: true } });
     if (!owner) throw new ReminderError("NOT_FOUND");
+    if (!await hasEntitlement(userId, "automation.reminders")) return { reminders: [], candidatesDetected: 0, created: 0, updated: 0, deduplicated: 0, expired: 0, snoozed: 0, dismissed: 0 };
     const initialPreferences = await getNotificationPreferences(userId);
     if (!enabledReminderTypes(initialPreferences).length) {
       await db().$transaction(async (tx) => {
@@ -276,6 +278,7 @@ export async function evaluateReminders(
     let created = 0, updated = 0, deduplicated = 0, expired = 0;
     await db().$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
+      if (!await hasEntitlement(userId, "automation.reminders", transaction)) return;
       const preferences = await getNotificationPreferences(userId, transaction);
       await cancelDisabledReminders(transaction, userId, preferences, now);
       ranked = rankReminderCandidates(detectReminderCandidates({ ...input, timezone: preferences.timezone, leadTimeMinutes: preferences.leadTimeMinutes })

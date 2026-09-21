@@ -1,3 +1,4 @@
+import { EntitlementError } from "./entitlements/errors";
 import "server-only";
 import { captureUsageContext, withAIUsageContext } from "./ai/usage/context";
 import { DocumentError } from "@/server/documents/config";
@@ -88,6 +89,7 @@ export async function api(
     }
     return Response.json(result ?? { success: true }, { headers: { ...noStore, "X-Request-ID": usageContext.requestId! } });
   } catch (error) {
+    if (error instanceof EntitlementError) return Response.json({ error: error.message, code: error.code, plansUrl: error.plansUrl }, { status: error.status, headers: noStore });
     if (error instanceof z.ZodError)
       return Response.json(
         {
@@ -122,12 +124,15 @@ export async function api(
     if (typeof code === "string") {
       const status =
         ["UNAUTHENTICATED", "AUTHENTICATION_FAILURE"].includes(code) ? 401
+          : ["ENTITLEMENT_REQUIRED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED"].includes(code) ? 403
           : ["NOT_FOUND", "RUN_NOT_FOUND", "QUIZ_NOT_FOUND", "PLAN_NOT_FOUND", "TASK_NOT_FOUND", "CONVERSATION_NOT_FOUND", "REFERENCE_NOT_FOUND"].includes(code) ? 404
-            : code === "RATE_LIMIT" ? 429
+            : ["PLAN_USAGE_EXHAUSTED", "RATE_LIMIT", "AI_REQUEST_RATE_LIMITED", "AI_CONCURRENCY_LIMIT", "AI_EMBEDDING_LIMIT"].includes(code) ? 429
+              : code === "AI_DUPLICATE_REQUEST" ? 409
+                : ["AI_GUARD_STORAGE_UNAVAILABLE", "AI_FEATURE_DISABLED", "AI_SERVICE_TEMPORARILY_UNAVAILABLE", "AI_STREAM_INTERRUPTED", "TIMEOUT"].includes(code) ? 503
               : ["PROVIDER_FAILURE", "STORAGE_FAILURE", "CONFIGURATION", "AUTHENTICATION", "INVALID_RESPONSE"].includes(code) ? 503
                 : 400;
       return Response.json(
-        { error: error instanceof Error ? error.message : "The request could not be completed." },
+        { error: error instanceof Error ? error.message : "The request could not be completed.", ...(["ENTITLEMENT_REQUIRED", "PLAN_USAGE_EXHAUSTED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED"].includes(code) ? { code, plansUrl: "/plans" } : {}) },
         { status, headers: noStore },
       );
     }

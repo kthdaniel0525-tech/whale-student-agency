@@ -1,6 +1,8 @@
+import { testAllowances } from "./entitlement-fixture";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { OpenAIProvider } from "@/server/ai/providers/openai";
+import { testGuards } from "./guard-fixture";
 import { AI_DEFAULTS } from "@/server/ai/config";
 import { captureUsageContext, withAIUsageContext, withAIUsageStream } from "@/server/ai/usage/context";
 import { DEFAULT_PRICING, estimateCost, getModelPricing, pricingSchema } from "@/server/ai/usage/pricing";
@@ -22,7 +24,7 @@ function fixture(value: unknown = response(), status = 200) {
   const write = vi.fn(async (record: UsageRecordInput) => { records.push(record); });
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json(value, status));
   let ticks = 0;
-  const provider = new OpenAIProvider({ ...AI_DEFAULTS, apiKey: "test-only" }, fetcher, { write, clock: () => ticks++ * 125, pricing: DEFAULT_PRICING });
+  const provider = new OpenAIProvider({ ...AI_DEFAULTS, apiKey: "test-only" }, fetcher, { write, clock: () => ticks++ * 125, pricing: DEFAULT_PRICING, allowances: testAllowances, guards: testGuards() });
   return { provider, records, write, fetcher };
 }
 function stream(events: unknown[]) {

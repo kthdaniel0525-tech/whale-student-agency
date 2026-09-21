@@ -2,11 +2,21 @@ import "server-only";
 import { z } from "zod";
 import { db } from "../../db/client";
 import { AI_OPERATIONS, AI_SOURCES } from "./types";
+import { MODEL_TIERS, COMPLEXITY_LEVELS, ROUTING_METHODS } from "../routing/types";
+import { FAILURE_CLASSES } from "../reliability/failures";
+import { AI_GUARD_CODES } from "../errors";
 
 const count = z.number().int().nonnegative().max(2_147_483_647);
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:/@+-]+$/);
 export const usageRecordSchema = z.object({
   id, userId: id, provider: id, model: id, requestId: id,
+  promptVersion: id.optional(), routingVersion: id.optional(), contextVersion: id.optional(),
+  selectedModel: id.optional(), selectedTier: z.enum(MODEL_TIERS).optional(),
+  routingComplexity: z.enum(COMPLEXITY_LEVELS).optional(), routingReasonCode: id.optional(),
+  routingMethod: z.enum(ROUTING_METHODS).optional(), fallbackUsed: z.boolean().optional(),
+  primaryProvider: id.optional(), primaryModel: id.optional(), attemptNumber: count.optional(), fallbackDepth: count.optional(),
+  fallbackFromProvider: id.optional(), fallbackFromModel: id.optional(), finalProvider: id.optional(),
+  failureClass: z.enum(FAILURE_CLASSES).optional(), streamStarted: z.boolean().optional(), tokensEmitted: count.optional(),
   operationType: z.enum(AI_OPERATIONS),
   agentId: id.nullish(), workflowId: id.optional(), workflowRunId: id.optional(), conversationId: id.optional(),
   inputTokens: count.nullable(), outputTokens: count.nullable(), totalTokens: count.nullable(),
@@ -14,7 +24,7 @@ export const usageRecordSchema = z.object({
   usageSource: z.enum(["provider", "estimated", "unavailable"]),
   estimatedCostUsd: z.number().finite().nonnegative().nullable(), pricingVersion: id.nullable(),
   latencyMs: count, success: z.boolean(),
-  errorCode: z.enum(["CONFIGURATION", "AUTHENTICATION", "RATE_LIMIT", "PROVIDER_FAILURE", "INVALID_REQUEST", "INVALID_RESPONSE", "CANCELLED"]).optional(),
+  errorCode: z.enum(["CONFIGURATION", "AUTHENTICATION", "RATE_LIMIT", "PROVIDER_FAILURE", "INVALID_REQUEST", "INVALID_RESPONSE", "CANCELLED", "TIMEOUT", "UNSUPPORTED_CAPABILITY", "CONTEXT_TOO_LARGE", "AI_SERVICE_TEMPORARILY_UNAVAILABLE", "AI_STREAM_INTERRUPTED", ...AI_GUARD_CODES]).optional(),
   source: z.enum(AI_SOURCES).optional(), batchSize: count.optional(),
   estimatedContextTokens: count.optional(), ragChunkCount: count.optional(), retrievedTokenEstimate: count.optional(),
   memoriesUsed: count.optional(), personalizationFieldsUsed: count.optional(),

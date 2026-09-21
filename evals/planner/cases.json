@@ -1,0 +1,90 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "planner-deadlines",
+      "profile": "study-planner",
+      "request": "Plan one hour before my October 2 exam; preserve completed task done-1.",
+      "context": {
+        "output": {
+          "plan": {
+            "title": "Induction exam preparation",
+            "startDate": "2026-10-01",
+            "endDate": "2026-10-02",
+            "summary": "Repair weak induction skills before the exam.",
+            "totalPlannedMinutes": 60,
+            "days": [
+              {
+                "date": "2026-10-01",
+                "totalMinutes": 60,
+                "sessions": [
+                  {
+                    "signalId": "weak-induction",
+                    "title": "Practice induction proofs",
+                    "topic": "Induction",
+                    "activityType": "practice",
+                    "durationMinutes": 45
+                  },
+                  {
+                    "signalId": "strong-logic",
+                    "title": "Review logical equivalence",
+                    "topic": "Logic",
+                    "activityType": "review",
+                    "durationMinutes": 15
+                  }
+                ]
+              }
+            ]
+          },
+          "preservedCompletedIds": [
+            "done-1"
+          ],
+          "scheduledSessions": [
+            {
+              "start": "2026-10-01T15:00:00Z",
+              "end": "2026-10-01T15:45:00Z"
+            },
+            {
+              "start": "2026-10-01T16:00:00Z",
+              "end": "2026-10-01T16:15:00Z"
+            }
+          ]
+        },
+        "expected": {
+          "availability": [
+            {
+              "date": "2026-10-01",
+              "availableMinutes": 60
+            }
+          ],
+          "deadlines": {
+            "weak-induction": "2026-10-02"
+          },
+          "weakSignalIds": [
+            "weak-induction"
+          ],
+          "strongSignalIds": [
+            "strong-logic"
+          ],
+          "completedTaskIds": [
+            "done-1"
+          ],
+          "busyIntervals": [
+            {
+              "start": "2026-10-01T17:00:00Z",
+              "end": "2026-10-01T18:00:00Z"
+            }
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+import { assertEntitlement, hasEntitlement, lockEntitlementUser } from "../entitlements/service";
+import { assertResourceCreation } from "../entitlements/resources";
+import { EntitlementError } from "../entitlements/errors";
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@/generated/prisma/client";
@@ -210,9 +213,12 @@ export async function saveExplicitMemory(input: ExplicitMemoryInput, requestHead
   const score = importance(item.category, input.importance);
   try {
     const row = await db().$transaction(async (transaction) => {
+      await lockEntitlementUser(transaction, userId);
+      await assertEntitlement(userId, "personalization.memory", transaction);
       const existing = await transaction.userMemory.findUnique({
         where: { userId_category_key: { userId, category: categoryToDb[item.category], key: item.key } },
       });
+      await assertResourceCreation(userId, "memory", transaction, existing?.id);
       if (!existing) await makeCapacity(transaction, userId);
       const now = new Date();
       const memory = await transaction.userMemory.upsert({
@@ -238,7 +244,7 @@ export async function saveExplicitMemory(input: ExplicitMemoryInput, requestHead
     await persistSemanticEmbedding(row, options);
     return publicMemory(row)!;
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }
@@ -255,6 +261,8 @@ export async function recordMemoryObservation(input: MemoryObservationInput, opt
   if (!evidenceToDb[input.evidenceType]) throw new MemoryError("INVALID_REQUEST");
   try {
     const row = await db().$transaction(async (transaction) => {
+      await lockEntitlementUser(transaction, userId);
+      await assertEntitlement(userId, "personalization.memory", transaction);
       const user = await transaction.user.findUnique({ where: { id: userId }, select: { id: true } });
       if (!user) throw new MemoryError("MEMORY_NOT_FOUND");
       let memory = await transaction.userMemory.findUnique({
@@ -300,6 +308,7 @@ export async function recordMemoryObservation(input: MemoryObservationInput, opt
         Math.round(20 + winner[1] * 15 + dominance * 20),
       );
       const promoted = winner[1] >= MEMORY_CONFIG.promotionEvidenceCount && dominance >= MEMORY_CONFIG.promotionDominance;
+      if (memory.status === "ACTIVE" || promoted) await assertResourceCreation(userId, "memory", transaction, memory.id);
       const updated = await transaction.userMemory.update({
         where: { id: memory.id },
         data: {
@@ -317,7 +326,7 @@ export async function recordMemoryObservation(input: MemoryObservationInput, opt
     await persistSemanticEmbedding(row, options);
     return publicMemory(row)!;
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }
@@ -327,6 +336,7 @@ export async function retrieveRelevantMemories(input: MemoryRetrievalInput, opti
   if (!input.userId || input.userId.length > 100 || !input.request.trim() || input.request.length > 10_000) throw new MemoryError("INVALID_REQUEST");
   const limit = input.limit ?? MEMORY_CONFIG.defaultRetrievalLimit;
   if (!Number.isInteger(limit) || limit < 1 || limit > MEMORY_CONFIG.maximumRetrievalLimit) throw new MemoryError("INVALID_REQUEST");
+  if (!await hasEntitlement(input.userId, "personalization.memory")) return [];
   const requestedCategories = input.categories?.length ? [...new Set(input.categories)] : inferMemoryCategories(input.request);
   if (requestedCategories.some((category) => !memoryCategorySchema.safeParse(category).success)) throw new MemoryError("INVALID_REQUEST");
   const requestedKeys = new Set<string>();
@@ -358,7 +368,7 @@ export async function retrieveRelevantMemories(input: MemoryRetrievalInput, opti
       .slice(0, limit)
       .map(({ row }) => row);
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }
@@ -392,8 +402,11 @@ export async function updateMemory(id: string, input: MemoryUpdateInput, request
   if (!id || id.length > 100 || (input.value === undefined && input.importance === undefined)) throw new MemoryError("INVALID_REQUEST");
   try {
     const row = await db().$transaction(async (transaction) => {
+      await lockEntitlementUser(transaction, userId);
+      await assertEntitlement(userId, "personalization.memory", transaction);
       const existing = await transaction.userMemory.findFirst({ where: { id, userId } });
       if (!existing) throw new MemoryError("MEMORY_NOT_FOUND");
+      if (input.value !== undefined) await assertResourceCreation(userId, "memory", transaction, existing.id);
       const category = categoryFromDb[existing.category];
       if (!category) throw new MemoryError("INVALID_REQUEST");
       const score = importance(category, input.importance ?? existing.importance);
@@ -410,7 +423,7 @@ export async function updateMemory(id: string, input: MemoryUpdateInput, request
     await persistSemanticEmbedding(row, options);
     return publicMemory(row)!;
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }
@@ -424,7 +437,7 @@ export async function archiveMemory(id: string, requestHeaders: Headers): Promis
     const row = await db().userMemory.findFirst({ where: { id, userId } });
     return publicMemory(row!)!;
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }
@@ -437,7 +450,7 @@ export async function deleteMemory(id: string, requestHeaders: Headers): Promise
     if (!deleted.count) throw new MemoryError("MEMORY_NOT_FOUND");
     return { success: true };
   } catch (error) {
-    if (error instanceof MemoryError) throw error;
+    if (error instanceof MemoryError || error instanceof EntitlementError) throw error;
     throw new MemoryError("STORAGE_FAILURE");
   }
 }

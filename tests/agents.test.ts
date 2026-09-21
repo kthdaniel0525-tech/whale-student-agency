@@ -64,7 +64,7 @@ describe("AgentRegistry", () => {
     const registry = new AgentRegistry();
     const agent = tutor();
     registry.register(agent);
-    expect(registry.get("tutor")).toEqual(agent);
+    expect(registry.get("tutor")).toEqual({ ...agent, promptVersion: expect.stringMatching(/^tutor:agent-frame-v1:/) });
     expect(registry.get("tutor")).not.toBe(agent);
     expect(registry.has("tutor")).toBe(true);
     expect(registry.has("notes")).toBe(false);
@@ -226,6 +226,7 @@ describe("student metadata and execution contracts", () => {
         "description",
         "id",
         "name",
+        "promptVersion",
       ]);
       expect(agent.description.length).toBeLessThan(100);
       expect(agent.capabilities.length).toBeGreaterThan(0);

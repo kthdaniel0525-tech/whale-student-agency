@@ -1,3 +1,7 @@
+import { checkAIUsageAllowance } from "../entitlements/usage";
+import { captureUsageContext } from "../ai/usage/context";
+import type { AIUsageContext } from "../ai/usage/types";
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { bindUsageOwner } from "../ai/usage/context";
 import { availabilityContext } from "./availability";
@@ -43,6 +47,7 @@ export async function buildUserContext(
   request: ContextRequest,
   requestHeaders: Headers,
   cache?: ContextReadCache,
+  execution?: Pick<AIUsageContext, "agentId" | "workflowId">,
 ): Promise<UserContext> {
   const session = await auth().api.getSession({
     headers: requestHeaders,
@@ -53,6 +58,7 @@ export async function buildUserContext(
   if (!parsed.success) throw new ContextError("INVALID_REQUEST");
   const input = parsed.data;
   const userId = session.user.id;
+  if (execution) await checkAIUsageAllowance(userId, captureUsageContext(execution));
   let selectedExamTopics: string[] | undefined;
   const selectedAssignment = input.assignmentId ? await getAssignment(userId, input.assignmentId) : undefined;
   if (selectedAssignment) {
@@ -148,6 +154,8 @@ export async function buildUserContext(
       };
     }
   }
+  // Check outside the context cache so a downgrade cannot reuse premium memory.
+  if (input.options.memories && !await hasEntitlement(userId, "personalization.memory")) loaders.memories = async () => { unavailable.push("memories"); };
   if (input.options.academicOverview) {
     // Profile establishes semester/timezone; deadlines establish exact readiness topics.
     await loaders.profile();

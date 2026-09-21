@@ -11,6 +11,7 @@ import {
   type AgentRoutingResult,
 } from "../server/agents/router";
 import type { AIProvider, AIStructuredRequest } from "../server/ai/types";
+import { AIError } from "../server/ai/errors";
 
 function registry(): AgentRegistry {
   const result = new AgentRegistry();
@@ -51,6 +52,11 @@ function fallback(data: unknown = { agentId: "tutor", confidence: 0.75 }) {
 }
 
 describe("Agent Router deterministic layers", () => {
+  it("propagates safety stops instead of launching a default agent after blocked routing", async () => {
+    const ai = fallback(); ai.generate.mockRejectedValueOnce(new AIError("AI_REQUEST_BUDGET_EXCEEDED"));
+    await expect(new AgentRouter(registry(), ai).routeAgent({ request: "Consider careerism" })).rejects.toMatchObject({ code: "AI_REQUEST_BUDGET_EXCEEDED" });
+    expect(ai.generate).toHaveBeenCalledTimes(1);
+  });
   it.each([
     ["Explain mathematical induction", "tutor"],
     ["Summarize lecture 5", "notes"],

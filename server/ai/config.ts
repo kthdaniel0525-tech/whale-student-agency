@@ -1,13 +1,15 @@
 import "server-only";
 import { z } from "zod";
 import { AIError } from "./errors";
+import { MODEL_IDS } from "./routing/catalog";
 
 export const AI_DEFAULTS = {
-  chatModel: "gpt-4.1-mini",
-  embeddingModel: "text-embedding-3-small",
+  chatModel: MODEL_IDS.baseline,
+  embeddingModel: MODEL_IDS.embedding,
   embeddingDimensions: 1536,
   maxOutputTokens: 2048,
   timeoutMs: 30000,
+  reasoningTimeoutMs: 180000,
 } as const;
 
 // Persisted RAG vectors depend on this exact model, dimension and preprocessing ID.
@@ -27,6 +29,7 @@ export type AIConfig = {
   temperature?: number;
   maxOutputTokens: number;
   timeoutMs: number;
+  reasoningTimeoutMs?: number;
 };
 
 const schema = z.object({
@@ -61,6 +64,7 @@ const schema = z.object({
     .min(1)
     .max(300000)
     .default(AI_DEFAULTS.timeoutMs),
+  AI_REASONING_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(AI_DEFAULTS.reasoningTimeoutMs),
 });
 
 // Lazy and separate from auth/DB configuration: RAG does not require an OpenAI key.
@@ -76,5 +80,6 @@ export function getAIConfig(): AIConfig {
     temperature: env.AI_TEMPERATURE,
     maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS,
     timeoutMs: env.AI_TIMEOUT_MS,
+    reasoningTimeoutMs: env.AI_REASONING_TIMEOUT_MS,
   };
 }

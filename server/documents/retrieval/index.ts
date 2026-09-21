@@ -1,4 +1,5 @@
 import "server-only";
+import { isGuardrailError } from "../../ai/errors";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/server/db/client";
 import {
@@ -59,7 +60,8 @@ export async function retrieveAcademicContext(
     vector = JSON.stringify(
       validateEmbedding(await provider.generateEmbedding(input.query, { userId, source: "rag-query" })),
     );
-  } catch {
+  } catch (error) {
+    if (isGuardrailError(error)) throw error;
     throw new DocumentError(
       "Semantic search is unavailable. Check that the embedding model has been prepared.",
       503,

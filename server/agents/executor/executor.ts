@@ -1,6 +1,10 @@
+import { EntitlementError } from "../../entitlements/errors";
 import "server-only";
+import { promptVersion, CONTEXT_VERSION } from "../../ai/evaluation/versions";
 import { captureUsageContext, usageOwner, withAIUsageContext, withAIUsageStream } from "../../ai/usage/context";
 import type { AIUsageContext } from "../../ai/usage/types";
+import { agentRoutingHints } from "../../ai/routing/agent-signals";
+import type { ModelRoutingHints } from "../../ai/routing/types";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AIError } from "../../ai/errors";
@@ -104,6 +108,7 @@ async function defaultProvider(): Promise<AIProvider> {
 }
 
 type PreparedExecution<Extension extends string> = {
+  routing: ModelRoutingHints;
   usageContext: AIUsageContext;
   started: number;
   agent: Agent<Extension>;
@@ -185,7 +190,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       const response = responseSchema.safeParse(
-        await provider.generateText({ messages: prepared.messages, usageContext: prepared.usageContext }),
+        await provider.generateText({ messages: prepared.messages, usageContext: prepared.usageContext, routing: prepared.routing }),
       );
       if (!response.success) throw new AIError("INVALID_RESPONSE");
       await this.persistAssistant(prepared, response.data.text);
@@ -214,7 +219,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       let completed: unknown;
-      for await (const event of provider.streamText({ messages: prepared.messages, usageContext: prepared.usageContext })) {
+      for await (const event of provider.streamText({ messages: prepared.messages, usageContext: prepared.usageContext, routing: prepared.routing })) {
         if (event.type === "text-delta") yield event;
         else completed = event.response;
       }
@@ -278,6 +283,7 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       const provider = await getProvider();
       const response = await provider.generateStructuredOutput({
+        routing: prepared.routing,
         usageContext: prepared.usageContext,
         messages: prepared.messages,
         schemaName: output.schemaName,
@@ -360,9 +366,10 @@ export class AgentExecutor<Extension extends string = never> {
     try {
       // Existing Context Builder authenticates the session and derives userId.
       context = this.#contextCache
-        ? await buildUserContext(contextRequest, requestHeaders, this.#contextCache)
-        : await buildUserContext(contextRequest, requestHeaders);
+        ? await buildUserContext(contextRequest, requestHeaders, this.#contextCache, { agentId: agent.id })
+        : await buildUserContext(contextRequest, requestHeaders, undefined, { agentId: agent.id });
     } catch (error) {
+      if (error instanceof EntitlementError) throw error;
       throw new AgentExecutionError(
         error instanceof ContextError ? error.code : "CONTEXT_FAILURE",
       );
@@ -475,7 +482,9 @@ export class AgentExecutor<Extension extends string = never> {
 
     return {
       started,
+      routing: agentRoutingHints(agent.id, request, context, adaptive.strategy),
       usageContext: captureUsageContext({
+        promptVersion: promptVersion(agent.id, this.#instructions.get(agent.id)), contextVersion: CONTEXT_VERSION,
         ...(usageOwner(context) ? { userId: usageOwner(context) } : {}),
         agentId: agent.id,
         ...(conversation ? { conversationId: conversation.id } : {}),
@@ -553,9 +562,7 @@ export class AgentExecutor<Extension extends string = never> {
   }
 
   private providerError(error: unknown): AIError {
-    return new AIError(
-      error instanceof AIError ? error.code : "PROVIDER_FAILURE",
-    );
+    return error instanceof AIError ? error : new AIError("PROVIDER_FAILURE");
   }
 
   private conversationError(error: unknown): AgentExecutionError {

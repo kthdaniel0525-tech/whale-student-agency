@@ -1,3 +1,5 @@
+import { admitDocumentProcessing } from "../entitlements/resources";
+import { assertEntitlement, lockEntitlementUser } from "../entitlements/service";
 import "server-only";
 import { withAIUsageContext } from "../ai/usage/context";
 import { randomUUID } from "node:crypto";
@@ -24,7 +26,14 @@ export async function replaceDocumentSource(input: {
     provider?: EmbeddingProvider;
 }) {
     const check = hooks.check ?? (() => { }), fileType = validateFile(input.fileName, input.bytes);
-    const prepared = await withAIUsageContext({ userId: input.userId, source: "rag-document" }, () => prepareDocument(input.bytes, fileType, hooks.provider ?? embeddingProvider, check));
+    await db().$transaction(async tx => {
+      await lockEntitlementUser(tx, input.userId);
+      const current = await tx.document.findFirst({ where: { id: input.documentId, userId: input.userId, courseId: input.courseId } });
+      if (!current) throw new NotFoundError();
+      await hooks.guard(tx);
+      await admitDocumentProcessing(input.userId, input.bytes.length, tx);
+    });
+    const prepared = await withAIUsageContext({ userId: input.userId, guardProfile: "BACKGROUND", source: "rag-document" }, () => prepareDocument(input.bytes, fileType, hooks.provider ?? embeddingProvider, check));
     check();
     const key = randomUUID();
     let committed = false;
@@ -32,6 +41,7 @@ export async function replaceDocumentSource(input: {
         await storage.put(key, input.bytes);
         await db().$transaction(async (tx) => {
             await tx.$queryRaw `SELECT id FROM "User" WHERE id=${input.userId} FOR UPDATE`;
+            await assertEntitlement(input.userId, "academic.documents", tx);
             await hooks.guard(tx);
             await tx.$queryRaw `SELECT id FROM "Document" WHERE id=${input.documentId} AND "userId"=${input.userId} FOR UPDATE`;
             const current = await tx.document.findFirst({ where: { id: input.documentId, userId: input.userId, courseId: input.courseId } });

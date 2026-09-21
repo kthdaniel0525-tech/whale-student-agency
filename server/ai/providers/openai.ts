@@ -3,9 +3,9 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
 import { z } from "zod";
-import { getAIConfig, type AIConfig } from "../config";
+import { AI_DEFAULTS, getAIConfig, type AIConfig } from "../config";
 import { AIError } from "../errors";
-import { trackAIProvider, type UsageTrackingOptions } from "../usage/tracking";
+import { trackAIProvider, markTrackedProvider, type UsageTrackingOptions } from "../usage/tracking";
 import type {
   AIProvider,
   AITextRequest,
@@ -30,6 +30,7 @@ const textInput = z.object({
   model: z.string().trim().min(1).max(200).optional(),
   temperature: z.number().finite().min(0).max(2).optional(),
   maxOutputTokens: z.number().int().min(16).optional(),
+  reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
 });
 const embeddingInput = z.object({
   input: z.string().refine((value) => value.trim().length > 0),
@@ -110,22 +111,23 @@ function validateResponse(value: unknown): AITextResponse {
 }
 
 function providerError(error: unknown, signal?: AbortSignal): AIError {
+  if (signal?.aborted) return signal.reason instanceof AIError ? signal.reason : new AIError("CANCELLED");
   if (error instanceof AIError) return error;
-  if (signal?.aborted || error instanceof OpenAI.APIUserAbortError)
-    return new AIError("CANCELLED");
+  if (error instanceof OpenAI.APIUserAbortError) return new AIError("CANCELLED");
+  if (error instanceof OpenAI.APIConnectionTimeoutError) return new AIError("TIMEOUT");
   if (error instanceof SyntaxError) return new AIError("INVALID_RESPONSE");
   if (error instanceof OpenAI.APIError) {
-    if (error.code === "invalid_api_key") return new AIError("AUTHENTICATION");
-    if (
-      error.code === "rate_limit_exceeded" ||
-      error.code === "insufficient_quota"
-    )
-      return new AIError("RATE_LIMIT");
-    if (error.status === 401 || error.status === 403)
-      return new AIError("AUTHENTICATION");
-    if (error.status === 429) return new AIError("RATE_LIMIT");
-    if ([400, 404, 422].includes(error.status || 0))
-      return new AIError("INVALID_REQUEST");
+    const raw = error.headers?.get("retry-after");
+    const retryAfterMs = raw ? (/^\d+(\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - Date.now()) : undefined;
+    const delay = retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? { retryAfterMs } : {};
+    if (error.code === "invalid_api_key" || error.status === 401 || error.status === 403) return new AIError("AUTHENTICATION");
+    if (error.code === "context_length_exceeded") return new AIError("CONTEXT_TOO_LARGE");
+    if (error.code === "unsupported_parameter" || error.code === "unsupported_value") return new AIError("UNSUPPORTED_CAPABILITY");
+    if (error.status === 429 || ["rate_limit_exceeded", "insufficient_quota"].includes(error.code ?? ""))
+      return new AIError("RATE_LIMIT", undefined, undefined, { kind: "rate-limit", scope: "provider", ...delay });
+    if (error.status === 503 || error.code === "server_is_overloaded")
+      return new AIError("PROVIDER_FAILURE", undefined, undefined, { kind: "overloaded", scope: "model", ...delay });
+    if ([400, 404, 422].includes(error.status || 0)) return new AIError("INVALID_REQUEST");
   }
   return new AIError("PROVIDER_FAILURE");
 }
@@ -171,21 +173,28 @@ class OpenAITransport implements AIProvider {
     const parsed = textInput.safeParse(request);
     if (!parsed.success) throw new AIError("INVALID_REQUEST");
     const input = parsed.data;
-    const temperature = input.temperature ?? this.#config.temperature;
+    const reasoning = input.reasoningEffort && input.reasoningEffort !== "none" ? input.reasoningEffort : undefined;
+    const temperature = reasoning ? undefined : input.temperature ?? this.#config.temperature;
     return {
       model: input.model ?? this.#config.chatModel,
       input: input.messages,
       max_output_tokens: input.maxOutputTokens ?? this.#config.maxOutputTokens,
       ...(temperature === undefined ? {} : { temperature }),
+      ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
       store: false,
     };
+  }
+
+  private callOptions(request: AITextRequest) {
+    return { signal: request.signal, ...(request.timeoutMs ? { timeout: request.timeoutMs } : request.reasoningEffort && request.reasoningEffort !== "none"
+      ? { timeout: this.#config.reasoningTimeoutMs ?? AI_DEFAULTS.reasoningTimeoutMs } : {}) };
   }
 
   async generateText(request: AITextRequest): Promise<AITextResponse> {
     try {
       const response = await this.#client.responses.create(
         this.parameters(request),
-        { signal: request.signal },
+        this.callOptions(request),
       );
       return readResponse(response);
     } catch (error) {
@@ -210,7 +219,7 @@ class OpenAITransport implements AIProvider {
       }
       const raw = await this.#client.responses.create(
         { ...params, text: { format } },
-        { signal: request.signal },
+        this.callOptions(request),
       );
       const response = readResponse(raw);
       // JSON Schema is sent to the provider; Zod still validates the returned data locally.
@@ -230,7 +239,7 @@ class OpenAITransport implements AIProvider {
     try {
       const stream = await this.#client.responses.create(
         { ...this.parameters(request), stream: true },
-        { signal: request.signal },
+        this.callOptions(request),
       );
       abort = () => stream.controller.abort();
       let text = "";
@@ -284,7 +293,7 @@ class OpenAITransport implements AIProvider {
           dimensions,
           encoding_format: "float",
         },
-        { signal: request.signal },
+        { signal: request.signal, ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}) },
       );
       reportedModel = response.model;
       const tokens = z.object({ prompt_tokens: z.number().int().nonnegative(), total_tokens: z.number().int().nonnegative() }).safeParse(response.usage);
@@ -310,7 +319,7 @@ class OpenAITransport implements AIProvider {
       return { model: valid.data.model, vector, ...(reportedUsage ? { usage: reportedUsage } : {}) };
     } catch (error) {
       const failure = providerError(error, request.signal);
-      throw new AIError(failure.code, reportedUsage, reportedModel);
+      throw new AIError(failure.code, reportedUsage, reportedModel, failure.failure);
     }
   }
 }
@@ -319,8 +328,9 @@ class OpenAITransport implements AIProvider {
 export class OpenAIProvider implements AIProvider {
   readonly #provider: AIProvider;
   constructor(config: AIConfig = getAIConfig(), fetcher?: typeof globalThis.fetch,
-    tracking: Pick<UsageTrackingOptions, "write" | "clock" | "pricing"> = {}) {
-    this.#provider = trackAIProvider(new OpenAITransport(config, fetcher), { ...tracking, provider: "openai", chatModel: config.chatModel, embeddingModel: config.embeddingModel });
+    tracking: Pick<UsageTrackingOptions, "write" | "clock" | "pricing" | "guards" | "allowances"> = {}) {
+    markTrackedProvider(this);
+    this.#provider = trackAIProvider(new OpenAITransport(config, fetcher), { ...tracking, provider: "openai", chatModel: config.chatModel, embeddingModel: config.embeddingModel, maxOutputTokens: config.maxOutputTokens });
   }
   generateText(request: AITextRequest) { return this.#provider.generateText(request); }
   generateStructuredOutput<T>(request: AIStructuredRequest<T>) { return this.#provider.generateStructuredOutput(request); }

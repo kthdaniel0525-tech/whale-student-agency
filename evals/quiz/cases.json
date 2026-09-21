@@ -1,0 +1,350 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "quiz-answer-integrity",
+      "profile": "quiz",
+      "request": "Create one easy multiple-choice question about induction.",
+      "context": {
+        "output": {
+          "quizTitle": "Induction basics",
+          "topic": "Induction",
+          "difficulty": "easy",
+          "questions": [
+            {
+              "type": "multiple-choice",
+              "prompt": "What is the inductive hypothesis?",
+              "choices": [
+                "Assume P(k)",
+                "Assume every statement",
+                "Skip the base case",
+                "Only prove P(1)"
+              ],
+              "correctAnswer": "Assume P(k)",
+              "explanation": "P(k) is assumed in the inductive step.",
+              "topics": [
+                "Induction"
+              ]
+            }
+          ]
+        },
+        "sources": [
+          {
+            "id": "math:0",
+            "documentId": "math",
+            "chunkIndex": 0,
+            "content": "The inductive hypothesis assumes P(k) for an arbitrary integer k in the specified domain. Prove P(k+1) from that assumption and establish the base case separately."
+          }
+        ],
+        "expected": {
+          "questionCount": 1,
+          "questionType": "multiple-choice",
+          "difficulty": "easy"
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-0",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            1,
+            1
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": " yes ",
+        "expected": "True"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-1",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            1,
+            1
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": "F",
+        "expected": "False"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-2",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            1,
+            1
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": "Assume P(k)",
+        "expected": "Assume P(k)"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-3",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": false,
+          "scoreRange": [
+            0,
+            0
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": "P(1)",
+        "expected": "P(k)"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-4",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": false,
+          "scoreRange": [
+            0,
+            0
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": " TRUE ",
+        "expected": "false"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-objective-5",
+      "profile": "grading",
+      "request": "Grade the objective answer.",
+      "context": {
+        "output": {},
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            1,
+            1
+          ]
+        }
+      },
+      "engine": "grading",
+      "input": {
+        "answer": "no",
+        "expected": "False"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-semantic-reference",
+      "profile": "grading",
+      "request": "Grade: explain induction. Answer: Check base case, assume P(k), then derive P(k+1).",
+      "context": {
+        "output": {
+          "correct": true,
+          "score": 1,
+          "feedback": "All proof components are present."
+        },
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            0.9,
+            1
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {
+        "question": "Explain the principle of induction.",
+        "expectedAnswer": "Establish the base case, assume P(k), and derive P(k+1).",
+        "userAnswer": "Check the base case, assume P(k), then derive P(k+1)."
+      },
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-semantic-0",
+      "profile": "grading",
+      "request": "Grade the induction explanation: Prove only the first example.",
+      "context": {
+        "output": {
+          "correct": false,
+          "score": 0.2,
+          "feedback": "Reference grade."
+        },
+        "expected": {
+          "correct": false,
+          "scoreRange": [
+            0,
+            0.4
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {
+        "question": "Explain the principle of induction.",
+        "expectedAnswer": "Establish the base case, assume P(k), and derive P(k+1).",
+        "userAnswer": "Prove only the first example."
+      },
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-semantic-1",
+      "profile": "grading",
+      "request": "Grade the induction explanation: Verify a base case and show each true case implies its successor.",
+      "context": {
+        "output": {
+          "correct": true,
+          "score": 0.925,
+          "feedback": "Reference grade."
+        },
+        "expected": {
+          "correct": true,
+          "scoreRange": [
+            0.85,
+            1
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {
+        "question": "Explain the principle of induction.",
+        "expectedAnswer": "Establish the base case, assume P(k), and derive P(k+1).",
+        "userAnswer": "Verify a base case and show each true case implies its successor."
+      },
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-semantic-2",
+      "profile": "grading",
+      "request": "Grade the induction explanation: Assume all statements are true without proving anything.",
+      "context": {
+        "output": {
+          "correct": false,
+          "score": 0.1,
+          "feedback": "Reference grade."
+        },
+        "expected": {
+          "correct": false,
+          "scoreRange": [
+            0,
+            0.2
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {
+        "question": "Explain the principle of induction.",
+        "expectedAnswer": "Establish the base case, assume P(k), and derive P(k+1).",
+        "userAnswer": "Assume all statements are true without proving anything."
+      },
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "grading-semantic-3",
+      "profile": "grading",
+      "request": "Grade the induction explanation: Assume P(k) and show P(k+1), but do not check the base case.",
+      "context": {
+        "output": {
+          "correct": false,
+          "score": 0.575,
+          "feedback": "Reference grade."
+        },
+        "expected": {
+          "correct": false,
+          "scoreRange": [
+            0.4,
+            0.75
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {
+        "question": "Explain the principle of induction.",
+        "expectedAnswer": "Establish the base case, assume P(k), and derive P(k+1).",
+        "userAnswer": "Assume P(k) and show P(k+1), but do not check the base case."
+      },
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

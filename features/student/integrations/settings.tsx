@@ -1,4 +1,5 @@
 "use client";
+import { FeatureAccess } from "../entitlements/access";
 import { DriveSettingsPanel } from "@/features/student/drive/settings";
 import { AcademicIntegrationSettings } from "@/features/student/academic-integrations/settings";
 import { CalendarSettingsPanel } from "@/features/student/calendar/settings";
@@ -51,14 +52,14 @@ export function IntegrationSettings({ initial, result }: { initial: IntegrationS
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busy) || !provider.available} onClick={() => connect(provider.id, account)}>{account.status === "connected" ? "Reconnect account" : "Reconnect"}</Button>
             {account.status !== "disconnected" && <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => setConfirm(account)}>Disconnect</Button>}</div></div>
         {account.status !== "disconnected" && <ul className="mt-3 space-y-2">{account.capabilities.map((capability) => <li key={capability} className="text-sm"><strong>{CAPABILITY_LABELS[capability].title}</strong><p className="text-muted-foreground">{CAPABILITY_LABELS[capability].description}</p></li>)}</ul>}
-        {account.provider === "google" && account.status !== "disconnected" && <CalendarSettingsPanel account={account} disabled={Boolean(busy) || !provider.available || account.status === "needs-reconnect"} enable={(capabilities) => void connect(provider.id, account, capabilities)} />}
-        {account.provider === "google" && account.status !== "disconnected" && <DriveSettingsPanel account={account} disabled={Boolean(busy) || !provider.available} enable={() => void connect(provider.id, account, ["drive-read"])} />}
+        {account.provider === "google" && account.status !== "disconnected" && <FeatureAccess capability="integration.calendar" title="Google Calendar"><CalendarSettingsPanel account={account} disabled={Boolean(busy) || !provider.available || account.status === "needs-reconnect"} enable={(capabilities) => void connect(provider.id, account, capabilities)} /></FeatureAccess>}
+        {account.provider === "google" && account.status !== "disconnected" && <FeatureAccess capability="integration.drive" title="Google Drive"><DriveSettingsPanel account={account} disabled={Boolean(busy) || !provider.available} enable={() => void connect(provider.id, account, ["drive-read"])} /></FeatureAccess>}
         {account.revocationFailed && account.status === "disconnected" && <p className="mt-3 text-sm text-muted-foreground">Local access is disabled. Review this app in your {provider.name} account permissions if you also want to verify external revocation.</p>}
       </article>)}
     </div>)}
     {error && <p role="alert" className="field-error mt-4">{error}</p>}
     <p role="status" className="mt-4 text-sm text-muted-foreground">{success || (busy ? "Updating your connection…" : "")}</p>
-    <AcademicIntegrationSettings />
+    <FeatureAccess capability="integration.lms" title="Academic connections"><AcademicIntegrationSettings /></FeatureAccess>
     <AlertDialog open={Boolean(confirm)} onOpenChange={(open) => { if (!open) setConfirm(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Disconnect {data.providers.find((provider) => provider.id === confirm?.provider)?.name}?</AlertDialogTitle><AlertDialogDescription>This will stop future access to connected services from this app. Your study plans, imported documents and academic data remain available. Your external calendar and files are also preserved.</AlertDialogDescription></AlertDialogHeader>
       <AlertDialogFooter><AlertDialogCancel>Keep connected</AlertDialogCancel><AlertDialogAction onClick={() => { if (confirm) void disconnect(confirm); }}>Disconnect account</AlertDialogAction></AlertDialogFooter>
     </AlertDialogContent></AlertDialog>

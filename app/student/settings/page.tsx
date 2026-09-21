@@ -1,3 +1,4 @@
+import { PlanAccessSummary } from "@/features/student/entitlements/access";
 import Link from "next/link";
 import { IntegrationSettings } from "@/features/student/integrations/settings";
 import { getIntegrationSettings } from "@/server/integrations/service";
@@ -28,6 +29,7 @@ export default async function Settings({ searchParams }: { searchParams: Promise
           <p>Keep your academic profile and preferences up to date.</p>
         </div>
       </div>
+      <PlanAccessSummary />
       <section className="panel max-w-4xl">
         <h2 className="mb-6">Academic profile</h2>
         <ProfileForm

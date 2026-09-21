@@ -1,4 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import "dotenv/config";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { db } from "@/server/db/client";
 import type { AIEmbeddingProvider } from "@/server/ai/types";
 import { RAG_EMBEDDING } from "@/server/ai/config";
 import {
@@ -8,6 +10,7 @@ import {
   EMBEDDING_DIMENSIONS,
 } from "@/server/documents/embeddings";
 afterEach(() => vi.unstubAllEnvs());
+afterAll(async () => { await db().$disconnect(); });
 
 it("preserves existing local RAG vectors and model ID through AIProvider.generateEmbedding", async () => {
   vi.stubEnv("OPENAI_API_KEY", undefined);

@@ -10,6 +10,7 @@ function createAuth() {
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [new URL(env.BETTER_AUTH_URL).origin],
+    databaseHooks: { user: { create: { after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); } } } },
     database: prismaAdapter(db(), { provider: "postgresql" }),
     emailAndPassword: {
       enabled: true,

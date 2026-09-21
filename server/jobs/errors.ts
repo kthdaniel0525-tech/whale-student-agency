@@ -48,6 +48,7 @@ export function normalizeBackgroundJobError(
   if (error instanceof Error) {
     const coded = error as CodedError;
     if (coded.name === "AIError") {
+      if (["AI_CONCURRENCY_LIMIT", "AI_REQUEST_RATE_LIMITED", "AI_EMBEDDING_LIMIT", "AI_GUARD_STORAGE_UNAVAILABLE"].includes(coded.code ?? "")) return new BackgroundJobError("TRANSIENT_PROVIDER_ERROR");
       return new BackgroundJobError(
         coded.retryable
           ? "TRANSIENT_PROVIDER_ERROR"

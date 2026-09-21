@@ -1,10 +1,11 @@
 import "dotenv/config";
+import { testHealth } from "./guard-fixture";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { auth } from "@/server/auth/config";
 import { db } from "@/server/db/client";
 import { writeUsageRecord, type UsageRecordInput } from "@/server/ai/usage/records";
-import { getAgentUsage, getDailyUsage, getModelUsage, getOperationUsage, getRequestUsage, getUserAIUsage, getUserUsageSummary, getWorkflowUsage } from "@/server/ai/usage/analytics";
+import { getAgentUsage, getDailyUsage, getModelUsage, getModelTierUsage, getOperationUsage, getRequestUsage, getUserAIUsage, getUserUsageSummary, getWorkflowUsage } from "@/server/ai/usage/analytics";
 import { OpenAIProvider } from "@/server/ai/providers/openai";
 import { AI_DEFAULTS } from "@/server/ai/config";
 import { IntelligentDispatcher } from "@/server/dispatcher/service";
@@ -17,6 +18,9 @@ import { GET } from "@/app/api/student/usage/route";
 import { appendConversationMessage, createConversation } from "@/server/conversations";
 import { embeddingProvider } from "@/server/documents/embeddings";
 import { withAIUsageContext } from "@/server/ai/usage/context";
+import { createRoutedAIProvider } from "@/server/ai/routing/provider";
+import { getRecentModelHistory } from "@/server/ai/routing/history";
+import { MODEL_IDS } from "@/server/ai/routing/catalog";
 
 type Actor = { id: string; headers: Headers };
 let owner: Actor, other: Actor;
@@ -35,14 +39,15 @@ function boundary(failFirst = false) {
   const bodies: Array<{ input: Array<{ content: string }>; text?: { format: { name: string } } }> = [];
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
     const body = JSON.parse(String(init?.body)); bodies.push(body);
-    if (failFirst && bodies.length === 1) return new Response(JSON.stringify({ error: { message: "busy" } }), { status: 429, headers: { "content-type": "application/json" } });
+    if (failFirst && bodies.length === 1) return new Response(JSON.stringify({ error: { message: "busy" } }), { status: 503, headers: { "content-type": "application/json" } });
     const format = body.text?.format?.name;
     const data = format === "intelligent_dispatch" ? { targetType: "agent", targetId: "tutor", confidence: .76, needsClarification: false, clarificationQuestion: null }
       : format === "conversation_summary" ? { activeGoals: [], importantFacts: [], decisions: [], unresolvedItems: [], activeResources: [], recentProgress: [], corrections: [], summaryText: "The student is practicing induction." } : null;
     const text = data ? JSON.stringify(data) : "Start with the base case and then the inductive step.";
-    return new Response(JSON.stringify({ id: randomUUID(), model: "gpt-4.1-mini", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 } }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ id: randomUUID(), model: body.model, status: "completed", output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 } }), { headers: { "content-type": "application/json" } });
   });
-  return { provider: new OpenAIProvider({ ...AI_DEFAULTS, apiKey: "test-only" }, fetcher), fetcher, bodies };
+  const openai = new OpenAIProvider({ ...AI_DEFAULTS, apiKey: "test-only" }, fetcher);
+  return { provider: createRoutedAIProvider({ health: testHealth(), providers: { openai }, embeddingProvider: openai }), fetcher, bodies };
 }
 beforeAll(async () => { owner = await actor(); other = await actor(); });
 beforeEach(async () => { await db().aIUsageRecord.deleteMany({ where: { userId: { in: [owner.id, other.id] } } }); });
@@ -125,13 +130,13 @@ describe.sequential("durable AI usage and authenticated integrations", () => {
     expect(result, JSON.stringify(result)).toMatchObject({ mode: "agent", result: { ok: true } });
     const records = await db().aIUsageRecord.findMany({ where: { userId: owner.id }, orderBy: { createdAt: "asc" } });
     expect(records).toHaveLength(2);
-    expect(records[0]).toMatchObject({ operationType: "routing", agentId: null });
-    expect(records[1]).toMatchObject({ operationType: "text-generation", agentId: "tutor" });
+    expect(records[0]).toMatchObject({ operationType: "routing", agentId: null, selectedTier: "FAST", fallbackUsed: false });
+    expect(records[1]).toMatchObject({ operationType: "text-generation", agentId: "tutor", selectedTier: "BALANCED", fallbackUsed: false });
     expect(new Set(records.map(r => r.requestId)).size).toBe(1);
     expect(records[1].personalizationFieldsUsed).toBeGreaterThan(0);
     expect(JSON.stringify(f.bodies)).not.toContain(records[0].requestId);
   });
-  it("attributes every WorkflowEngine retry/step to the same run and request", async () => {
+  it("attributes every reliability attempt and WorkflowEngine step to the same run and request", async () => {
     const f = boundary(true);
     const course = await db().course.create({ data: { userId: owner.id, courseCode: "USAGE101", courseName: "Usage Math", semester: "Fall" } });
     const exam = await db().exam.create({ data: { userId: owner.id, courseId: course.id, title: "Exam", examDate: new Date(Date.now() + 86400000), topics: ["Logic"] } });
@@ -158,6 +163,7 @@ describe.sequential("durable AI usage and authenticated integrations", () => {
     const execution = records.find(r => r.operationType === "text-generation");
     expect(summary).toMatchObject({ conversationId: conversation.id, source: "conversation-summary" });
     expect(execution).toMatchObject({ conversationId: conversation.id, conversationSummaryUsed: true, agentId: "tutor" });
+    expect(execution!.selectedTier).toBe("BALANCED");
     expect(execution!.recentMessageCount).toBeGreaterThan(0);
     expect(summary!.requestId).toBe(execution!.requestId);
   });
@@ -184,5 +190,49 @@ describe.sequential("durable AI usage and authenticated integrations", () => {
     expect((await getRequestUsage(owner.id, records[0].requestId)).groups.find(g => g.operationType === "text-generation")).toMatchObject({ ragChunksUsed: 1 });
     expect(JSON.stringify(records)).not.toContain("Private lecture");
     expect(JSON.stringify(records)).not.toContain("assume P(k)");
+  });
+  it("persists real Executor proof routing and exposes owned tier cost/latency analytics", async () => {
+    const f = boundary();
+    const executor = new AgentExecutor(createStudentAgentRegistry(), { getProvider: () => f.provider, conversationEmbeddingProvider: null });
+    await executor.execute({ agentId: "tutor", request: "Explain the induction proof and why the inductive hypothesis is valid." }, owner.headers);
+    const records = await db().aIUsageRecord.findMany({ where: { userId: owner.id } });
+    const generations = records.filter(r => r.operationType !== "embedding");
+    expect(generations).toHaveLength(1);
+    expect(generations[0]).toMatchObject({ selectedModel: MODEL_IDS.strong, model: MODEL_IDS.strong, selectedTier: "STRONG", routingComplexity: "HIGH", routingReasonCode: "HIGH_COMPLEXITY", fallbackUsed: false });
+    const group = (await getModelTierUsage({ userId: owner.id })).groups.find(g => g.key === "STRONG")!;
+    expect(group).toMatchObject({ key: "STRONG", kind: "generation", providerAttempts: 1, estimatedCostUsd: .0006 });
+    expect(group.averageLatencyMs).toBeGreaterThanOrEqual(0);
+    const request = (headers: Headers) => new Request("http://localhost:3000/api/student/usage?group=tier", { headers });
+    const body = await (await GET(request(owner.headers))).json() as { groups: unknown[] };
+    expect(body.groups).toEqual(expect.arrayContaining([expect.objectContaining({ key: "STRONG", providerAttempts: 1 })]));
+    expect(await (await GET(request(other.headers))).json()).toMatchObject({ groups: [] });
+    expect((await GET(request(new Headers()))).status).toBe(401);
+    expect(JSON.stringify(records)).not.toContain("inductive hypothesis");
+  });
+  it("keeps deterministic dispatch model-free before the one routed Agent call", async () => {
+    const f = boundary();
+    const result = await new IntelligentDispatcher({ getProvider: () => f.provider }).handleUserAIRequest({ request: "Explain what a stack is." }, owner.headers);
+    expect(result).toMatchObject({ mode: "agent", result: { ok: true } });
+    const records = await db().aIUsageRecord.findMany({ where: { userId: owner.id } });
+    const generations = records.filter(r => r.operationType !== "embedding");
+    expect(generations).toHaveLength(1); expect(generations[0]).toMatchObject({ agentId: "tutor", selectedTier: "BALANCED" });
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("bounds reliability observations by owner/time and excludes unrelated error classes", async () => {
+    const subject = await actor();
+    try {
+      const current = new Date();
+      for (let i = 0; i < 6; i++) await writeUsageRecord(record({ userId: subject.id, createdAt: current,
+        model: "snapshot", selectedModel: MODEL_IDS.strong, success: i < 3, latencyMs: 120,
+        ...(i >= 3 ? { errorCode: "PROVIDER_FAILURE" as const } : {}) }));
+      for (const errorCode of ["AUTHENTICATION", "CONFIGURATION", "CANCELLED", "INVALID_REQUEST"] as const)
+        await writeUsageRecord(record({ userId: subject.id, createdAt: current, model: "snapshot", selectedModel: MODEL_IDS.strong, success: false, errorCode }));
+      await writeUsageRecord(record({ userId: subject.id, createdAt: new Date(Date.now() - 25 * 3600_000), model: MODEL_IDS.strong }));
+      await writeUsageRecord(record({ userId: other.id, createdAt: current, model: "private-other-model" }));
+      expect(await getRecentModelHistory(subject.id)).toEqual([{ provider: "openai", model: MODEL_IDS.strong, samples: 6, failureRate: .5, averageLatencyMs: 120 }]);
+      expect(await getRecentModelHistory()).toEqual([]);
+      // A cache hit cannot mix records from another owner.
+      expect(await getRecentModelHistory(subject.id)).toEqual([{ provider: "openai", model: MODEL_IDS.strong, samples: 6, failureRate: .5, averageLatencyMs: 120 }]);
+    } finally { await db().user.delete({ where: { id: subject.id } }); }
   });
 });

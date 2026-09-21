@@ -1,4 +1,7 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
+import { workflowObservation } from "@/server/ai/evaluation/observations";
 import "dotenv/config";
+import { guardedWorkflowFixture } from "./guard-fixture";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { auth } from "@/server/auth/config";
@@ -62,7 +65,7 @@ function boundary(options: { fail?: string; code?: "PROVIDER_FAILURE" | "RATE_LI
     calls.push(name);
     if (options.fail === name && failureCount++ < (options.failures ?? 1)) throw new AIError(options.code ?? "PROVIDER_FAILURE");
   };
-  const provider: AIProvider = {
+  const transport: AIProvider = {
     async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
       maybeFail(request.schemaName); structured.push(request as AIStructuredRequest<unknown>);
       let data: unknown;
@@ -87,6 +90,7 @@ function boundary(options: { fail?: string; code?: "PROVIDER_FAILURE" | "RATE_LI
     async generateText() { maybeFail("tutor"); return { id: "tutor", model: "fixture", text: "Induction starts with a base case. Assume the statement for k, then prove it for k+1. Check that the assumption is applied only after establishing the base case." }; },
     streamText() { throw new Error("No separate pipeline."); }, generateEmbedding() { throw new Error("No external embeddings."); },
   };
+  const provider = guardedWorkflowFixture(transport);
   const getProvider = () => provider;
   return { provider, getProvider, calls, structured, service: new WorkflowService({ getProvider }) };
 }
@@ -112,6 +116,7 @@ describe.sequential("Exam Preparation with existing agents and real owned persis
     expect(result.completedSteps).toEqual(["analyze", "plan", "tutor", "practice"]);
     expect(result.steps.find((s) => s.stepId === "diagnostic")).toMatchObject({ status: "skipped", attempts: 0 });
     expect(ai.calls).toEqual(["academic_manager", "study_plan", "tutor", "quiz_generation"]);
+    expect(evaluateDeterministic({ profile: "workflow", request: "Evaluate observed workflow", output: workflowObservation(result), expected: { expectedStatus: "completed", maximumCalls: 6, maximumTutorCalls: 2, maximumQuizCalls: 2, requiredTerms: ["studyPlanId", "quizId"] } }).passed).toBe(true);
     expect(ai.structured.every((request) =>
       request.messages.some((message) => message.content.includes("[ADAPTATION]")),
     )).toBe(true);

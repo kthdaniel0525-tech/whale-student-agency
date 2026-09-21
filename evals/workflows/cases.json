@@ -1,0 +1,176 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "workflow-exam-preparation",
+      "profile": "workflow",
+      "request": "Complete exam-preparation",
+      "context": {
+        "output": {
+          "status": "completed",
+          "artifactIds": [
+            "plan"
+          ],
+          "totalCalls": 3,
+          "tutorCalls": 1,
+          "quizCalls": 1,
+          "startingMastery": 40,
+          "endingMastery": 52,
+          "confidence": 70
+        },
+        "expected": {
+          "expectedStatus": "completed",
+          "maximumCalls": 6,
+          "maximumTutorCalls": 2,
+          "maximumQuizCalls": 2,
+          "requiredTerms": [
+            "plan"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "workflow-weak-topic-recovery",
+      "profile": "workflow",
+      "request": "Complete weak-topic-recovery",
+      "context": {
+        "output": {
+          "status": "completed",
+          "artifactIds": [
+            "result"
+          ],
+          "totalCalls": 3,
+          "tutorCalls": 1,
+          "quizCalls": 1,
+          "startingMastery": 40,
+          "endingMastery": 52,
+          "confidence": 70
+        },
+        "expected": {
+          "expectedStatus": "completed",
+          "maximumCalls": 6,
+          "maximumTutorCalls": 2,
+          "maximumQuizCalls": 2,
+          "requiredTerms": [
+            "result"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "workflow-lecture-study",
+      "profile": "workflow",
+      "request": "Complete lecture-study",
+      "context": {
+        "output": {
+          "status": "completed",
+          "artifactIds": [
+            "result"
+          ],
+          "totalCalls": 3,
+          "tutorCalls": 1,
+          "quizCalls": 1,
+          "startingMastery": 40,
+          "endingMastery": 52,
+          "confidence": 70
+        },
+        "expected": {
+          "expectedStatus": "completed",
+          "maximumCalls": 6,
+          "maximumTutorCalls": 2,
+          "maximumQuizCalls": 2,
+          "requiredTerms": [
+            "result"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "workflow-assignment-support",
+      "profile": "workflow",
+      "request": "Complete assignment-support",
+      "context": {
+        "output": {
+          "status": "completed",
+          "artifactIds": [
+            "result"
+          ],
+          "totalCalls": 3,
+          "tutorCalls": 1,
+          "quizCalls": 1,
+          "startingMastery": 40,
+          "endingMastery": 52,
+          "confidence": 70
+        },
+        "expected": {
+          "expectedStatus": "completed",
+          "maximumCalls": 6,
+          "maximumTutorCalls": 2,
+          "maximumQuizCalls": 2,
+          "requiredTerms": [
+            "result"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "workflow-career-preparation",
+      "profile": "workflow",
+      "request": "Complete career-preparation",
+      "context": {
+        "output": {
+          "status": "completed",
+          "artifactIds": [
+            "result"
+          ],
+          "totalCalls": 3,
+          "tutorCalls": 1,
+          "quizCalls": 1,
+          "startingMastery": 40,
+          "endingMastery": 52,
+          "confidence": 70
+        },
+        "expected": {
+          "expectedStatus": "completed",
+          "maximumCalls": 6,
+          "maximumTutorCalls": 2,
+          "maximumQuizCalls": 2,
+          "requiredTerms": [
+            "result"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,243 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "dispatcher-0",
+      "profile": "dispatcher",
+      "request": "Explain induction.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "tutor"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Explain induction."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-1",
+      "profile": "dispatcher",
+      "request": "Prepare me for my exam.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "workflow",
+              "id": "exam-preparation"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Prepare me for my exam."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-2",
+      "profile": "dispatcher",
+      "request": "Study this PDF and quiz me.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "workflow",
+              "id": "lecture-study"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Study this PDF and quiz me.",
+        "documentId": "synthetic-pdf"
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-3",
+      "profile": "dispatcher",
+      "request": "Help improve my resume.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "career"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Help improve my resume."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-4",
+      "profile": "dispatcher",
+      "request": "Make me a study plan.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "study-planner"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Make me a study plan."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-5",
+      "profile": "dispatcher",
+      "request": "Create notes about recursion.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "notes"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Create notes about recursion."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-6",
+      "profile": "dispatcher",
+      "request": "Quiz me on logic.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "quiz"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Quiz me on logic."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-7",
+      "profile": "dispatcher",
+      "request": "Help me recover my weak topic.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "workflow",
+              "id": "weak-topic-recovery"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "Help me recover my weak topic."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "dispatcher-ambiguous",
+      "profile": "dispatcher",
+      "request": "I need help with induction before my exam.",
+      "context": {
+        "output": {},
+        "expected": {
+          "acceptableTargets": [
+            {
+              "type": "agent",
+              "id": "tutor"
+            },
+            {
+              "type": "workflow",
+              "id": "exam-preparation"
+            },
+            {
+              "type": "clarification"
+            },
+            {
+              "type": "agent",
+              "id": "academic-manager"
+            }
+          ]
+        }
+      },
+      "engine": "dispatcher",
+      "input": {
+        "request": "I need help with induction before my exam."
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { assertResourceCreation } from "../entitlements/resources";
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { cleanupAfterDelete } from "@/server/documents/cleanup";
@@ -39,8 +40,12 @@ export function listCourses(userId: string) {
     },
   });
 }
-export function createCourse(userId: string, input: CourseInput, client: Prisma.TransactionClient = db()) {
-  return client.course.create({ data: { ...input, userId } });
+export async function createCourse(userId: string, input: CourseInput, client?: Prisma.TransactionClient) {
+  const create = async (tx: Prisma.TransactionClient) => {
+    await assertResourceCreation(userId, "course", tx);
+    return tx.course.create({ data: { ...input, userId } });
+  };
+  return client ? create(client) : db().$transaction(create);
 }
 export async function updateCourse(
   userId: string,

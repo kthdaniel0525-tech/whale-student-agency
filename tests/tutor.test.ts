@@ -1,3 +1,4 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import {
@@ -284,6 +285,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     });
     const retrieved = await retrieve.mock.results[0].value;
     expect(retrieved).toHaveLength(1);
+    expect(evaluateDeterministic({ profile: "rag-retrieval", request, output: { chunkIds: retrieved.map((c: { documentId: string; chunkIndex: number }) => `${c.documentId}:${c.chunkIndex}`) }, expected: { relevantChunkIds: [`${documentId}:0`], k: 5 } }).metrics).toMatchObject({ recallAtK: 1, hitAtK: 1 });
     expect(build).toHaveBeenCalledTimes(1);
     expect(result.response.sources).toEqual([
       {

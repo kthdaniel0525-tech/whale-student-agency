@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AI_DEFAULTS, getAIConfig, type AIConfig } from "@/server/ai/config";
 import { AIError } from "@/server/ai/errors";
 import { getAIProvider } from "@/server/ai";
+import { testGuards } from "./guard-fixture";
 import { OpenAIProvider } from "@/server/ai/providers/openai";
 import type {
   AIProvider,
@@ -43,7 +44,7 @@ function fixture(data: unknown = response(), status = 200) {
   const fetcher = vi
     .fn<typeof globalThis.fetch>()
     .mockResolvedValue(json(data, status));
-  const provider: AIProvider = new OpenAIProvider(config, fetcher);
+  const provider: AIProvider = new OpenAIProvider(config, fetcher, { guards: testGuards() });
   return { provider, fetcher };
 }
 function sent(fetcher: ReturnType<typeof fixture>["fetcher"]) {
@@ -300,6 +301,19 @@ describe("AIProvider through the real OpenAI SDK and a mocked HTTP boundary", ()
       expect(fetcher).toHaveBeenCalledTimes(1);
     },
   );
+  it.each([
+    [429, "rate_limit_exceeded", "RATE_LIMIT", "rate-limit"],
+    [503, "server_is_overloaded", "PROVIDER_FAILURE", "overloaded"],
+    [400, "context_length_exceeded", "CONTEXT_TOO_LARGE", "context-too-large"],
+    [400, "unsupported_parameter", "UNSUPPORTED_CAPABILITY", "unsupported-capability"],
+  ])("normalizes recovery metadata for HTTP %i %s", async (status, code, expected, kind) => {
+    const { provider, fetcher } = fixture();
+    fetcher.mockResolvedValue(new Response(JSON.stringify({ error: { code, message: "SECRET" } }), { status: Number(status), headers: { "content-type": "application/json", "retry-after": "120" } }));
+    const error = await provider.generateText(request).catch(e => e);
+    expect(error.code).toBe(expected);
+    if (Number(status) !== 400) expect(error.failure).toMatchObject({ kind, retryAfterMs: 120000 });
+    expect(error.message).not.toContain("SECRET"); expect(fetcher).toHaveBeenCalledOnce();
+  });
   it("normalizes network errors", async () => {
     const { provider, fetcher } = fixture();
     fetcher.mockRejectedValue(Error("SECRET network details"));
@@ -409,10 +423,11 @@ describe("AIProvider through the real OpenAI SDK and a mocked HTTP boundary", ()
 });
 
 describe("central AI configuration", () => {
-  it("reports missing keys only when OpenAI is requested", () => {
+  it("constructs the registry lazily but rejects a missing key when the adapter is requested", () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     expect(() => getAIConfig()).not.toThrow();
-    expect(() => getAIProvider()).toThrow(
+    expect(() => getAIProvider()).not.toThrow();
+    expect(() => new OpenAIProvider()).toThrow(
       expect.objectContaining({ code: "CONFIGURATION" }),
     );
   });

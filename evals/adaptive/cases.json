@@ -1,0 +1,241 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "adaptive-confusion",
+      "profile": "adaptive",
+      "request": "I still don't understand. Explain again.",
+      "context": {
+        "output": {},
+        "expected": {
+          "facts": {
+            "changed": true
+          }
+        }
+      },
+      "engine": "adaptive",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "adaptive-quiz-failure",
+      "profile": "adaptive",
+      "request": "Adjust my next practice.",
+      "engine": "adaptive",
+      "input": {
+        "agentId": "quiz",
+        "outcomes": [
+          {
+            "id": "outcome-0",
+            "userId": "synthetic",
+            "agentId": "quiz",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "quiz-performance",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-0",
+            "createdAt": "2026-10-01T00:00:00Z"
+          },
+          {
+            "id": "outcome-1",
+            "userId": "synthetic",
+            "agentId": "quiz",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "quiz-performance",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-1",
+            "createdAt": "2026-10-02T00:00:00Z"
+          },
+          {
+            "id": "outcome-2",
+            "userId": "synthetic",
+            "agentId": "quiz",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "quiz-performance",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-2",
+            "createdAt": "2026-10-03T00:00:00Z"
+          },
+          {
+            "id": "outcome-3",
+            "userId": "synthetic",
+            "agentId": "quiz",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "quiz-performance",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-3",
+            "createdAt": "2026-10-04T00:00:00Z"
+          },
+          {
+            "id": "outcome-4",
+            "userId": "synthetic",
+            "agentId": "quiz",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "quiz-performance",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-4",
+            "createdAt": "2026-10-05T00:00:00Z"
+          }
+        ]
+      },
+      "context": {
+        "output": {},
+        "expected": {
+          "facts": {
+            "difficulty": "easy"
+          }
+        }
+      },
+      "modes": [
+        "FULL"
+      ]
+    },
+    {
+      "id": "adaptive-study-planner-failure",
+      "profile": "adaptive",
+      "request": "Update my study plan.",
+      "engine": "adaptive",
+      "input": {
+        "agentId": "study-planner",
+        "outcomes": [
+          {
+            "id": "outcome-0",
+            "userId": "synthetic",
+            "agentId": "study-planner",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "study-task-skipped",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-0",
+            "createdAt": "2026-10-01T00:00:00Z"
+          },
+          {
+            "id": "outcome-1",
+            "userId": "synthetic",
+            "agentId": "study-planner",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "study-task-skipped",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-1",
+            "createdAt": "2026-10-02T00:00:00Z"
+          },
+          {
+            "id": "outcome-2",
+            "userId": "synthetic",
+            "agentId": "study-planner",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "study-task-skipped",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-2",
+            "createdAt": "2026-10-03T00:00:00Z"
+          },
+          {
+            "id": "outcome-3",
+            "userId": "synthetic",
+            "agentId": "study-planner",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "study-task-skipped",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-3",
+            "createdAt": "2026-10-04T00:00:00Z"
+          },
+          {
+            "id": "outcome-4",
+            "userId": "synthetic",
+            "agentId": "study-planner",
+            "courseId": null,
+            "topicId": null,
+            "strategyKey": "synthetic",
+            "strategy": {
+              "recommendedSessionMinutes": 45
+            },
+            "outcomeType": "study-task-skipped",
+            "score": 0.2,
+            "successful": false,
+            "action": null,
+            "evidenceKey": "evidence-4",
+            "createdAt": "2026-10-05T00:00:00Z"
+          }
+        ]
+      },
+      "context": {
+        "output": {},
+        "expected": {
+          "facts": {
+            "intensity": "light",
+            "minutes": 30
+          }
+        }
+      },
+      "modes": [
+        "FULL"
+      ]
+    }
+  ]
+}

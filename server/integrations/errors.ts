@@ -1,5 +1,12 @@
+import { ENTITLEMENT_CODES } from "@/lib/entitlements/types";
+import { AIError } from "../ai/errors";
+import { EntitlementError } from "../entitlements/errors";
 import "server-only";
 export const INTEGRATION_ERROR_MESSAGES = {
+  ENTITLEMENT_REQUIRED: new AIError("ENTITLEMENT_REQUIRED").message,
+  PLAN_USAGE_EXHAUSTED: new AIError("PLAN_USAGE_EXHAUSTED").message,
+  PLAN_MODEL_QUALITY_CONFLICT: new AIError("PLAN_MODEL_QUALITY_CONFLICT").message,
+  ENTITLEMENT_FEATURE_DISABLED: new AIError("ENTITLEMENT_FEATURE_DISABLED").message,
   FILE_TOO_LARGE: "Files must be 10 MB or smaller.",
   RESOURCE_NOT_FOUND: "This external resource is no longer available.",
   SYNC_TOKEN_EXPIRED: "Calendar synchronization needs a fresh read.",
@@ -36,12 +43,13 @@ export class IntegrationError extends Error {
     super(INTEGRATION_ERROR_MESSAGES[code]); this.name = "IntegrationError";
     if (code === "PROVIDER_RATE_LIMITED") this.retryAfterSeconds = Math.min(3600, Math.max(30, Number.isFinite(retryAfterSeconds) ? Math.ceil(retryAfterSeconds!) : 60));
     this.status = code === "UNAUTHENTICATED" ? 401 : code === "NOT_FOUND" ? 404 :
-      code === "PROVIDER_RATE_LIMITED" ? 429 :
-      ["AUTHORIZATION_REQUIRED", "RECONNECT_REQUIRED", "DISCONNECTED"].includes(code) ? 403 :
+      ["PROVIDER_RATE_LIMITED", "PLAN_USAGE_EXHAUSTED"].includes(code) ? 429 :
+      [...ENTITLEMENT_CODES, "AUTHORIZATION_REQUIRED", "RECONNECT_REQUIRED", "DISCONNECTED"].includes(code) ? 403 :
       code === "CONNECTION_BUSY" ? 409 : ["CONFIGURATION", "PROVIDER_UNAVAILABLE", "ENCRYPTION_FAILURE", "STORAGE_FAILURE"].includes(code) ? 503 : 400;
   }
 }
 export function safeIntegrationError(error: unknown): IntegrationError {
+  if (error instanceof EntitlementError) return new IntegrationError(error.code as typeof ENTITLEMENT_CODES[number]);
   return error instanceof IntegrationError ? new IntegrationError(error.code, error.retryAfterSeconds) : new IntegrationError("STORAGE_FAILURE");
 }
 export async function protectIntegration<T>(operation: () => Promise<T>): Promise<T> {

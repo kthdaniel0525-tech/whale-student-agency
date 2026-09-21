@@ -1,4 +1,7 @@
+import { checkAIUsageAllowance } from "../entitlements/usage";
+import { captureUsageContext } from "../ai/usage/context";
 import "server-only";
+import { isGuardrailError, AIError } from "../ai/errors";
 import { withAIUsageContext } from "../ai/usage/context";
 import { z } from "zod";
 import { auth } from "../auth/config";
@@ -77,6 +80,11 @@ export class IntelligentDispatcher {
   async dispatch(raw: DispatcherInput, requestHeaders: Headers): Promise<DispatchDecision> {
     const { input, userId } = await this.prepare(raw, requestHeaders);
     return withAIUsageContext({ userId }, () => this.decide(input, this.#getProvider));
+  }
+
+  /** Synthetic offline classification only; performs no data reads or target execution. */
+  async classifyForEvaluation(raw: DispatcherInput): Promise<DispatchDecision> {
+    return this.decide(dispatcherInputSchema.parse(raw), this.#getProvider);
   }
 
   private async decide(input: z.infer<typeof dispatcherInputSchema>, getProvider: () => AIProvider | Promise<AIProvider>): Promise<DispatchDecision> {
@@ -202,6 +210,7 @@ export class IntelligentDispatcher {
     if (!session?.user.id) throw new DispatcherError("UNAUTHENTICATED");
     const parsed = dispatcherInputSchema.safeParse(raw);
     if (!parsed.success) throw new DispatcherError("INVALID_REQUEST");
+    await checkAIUsageAllowance(session.user.id, captureUsageContext({ agentId: parsed.data.preferredAgentId, workflowId: parsed.data.preferredWorkflowId }));
     return { input: parsed.data, headers, userId: session.user.id };
   }
 
@@ -228,7 +237,10 @@ export class IntelligentDispatcher {
       return result.targetType === "agent"
         ? { targetType: "agent", targetId: result.targetId as StudentAgentId, confidence: result.confidence, method: "llm-fallback", reason: "Selected from registered Agent and Workflow metadata." }
         : { targetType: "workflow", targetId: result.targetId as WorkflowId, confidence: result.confidence, method: "llm-fallback", reason: "Selected from registered Agent and Workflow metadata." };
-    } catch { return this.safeDefault(request); }
+    } catch (error) {
+      if (isGuardrailError(error) || error instanceof AIError && ["AI_SERVICE_TEMPORARILY_UNAVAILABLE", "CANCELLED"].includes(error.code)) throw error;
+      return this.safeDefault(request);
+    }
   }
 
   private safeDefault(request: string): DispatchTargetDecision {

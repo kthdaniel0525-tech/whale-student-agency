@@ -1,3 +1,5 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
+import { workflowObservation } from "@/server/ai/evaluation/observations";
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -80,6 +82,7 @@ describe.sequential("Assignment Support through real auth, database, context and
     expect(run, JSON.stringify(run)).toMatchObject({ status: "completed", completedSteps: ["understand"], assignmentSupport: { assignmentId: f.assignment.id, stage: "understand", nextAction: analysis.nextAction } });
     expect(run.outputs["assignment-analysis"]).toMatchObject({ ...analysis, assignmentSource: { assignmentId: f.assignment.id, updatedAt: f.assignment.updatedAt.toISOString() } });
     expect(ai.calls).toEqual(["assignment_analysis"]); expect(search).not.toHaveBeenCalled();
+    expect(evaluateDeterministic({ profile: "workflow", request: "Evaluate observed workflow", output: workflowObservation(run), expected: { expectedStatus: "completed", maximumCalls: 4, maximumTutorCalls: 2, maximumQuizCalls: 2, requiredTerms: ["assignment-analysis"] } }).passed).toBe(true);
     expect(ai.requests[0].messages.map((m) => m.content).join("\n")).toContain(instructions);
   });
   it("plans how to start without unnecessarily invoking conceptual help or waiting", async () => {

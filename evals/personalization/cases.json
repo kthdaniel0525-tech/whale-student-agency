@@ -1,0 +1,27 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "personalization-current-request",
+      "profile": "personalization",
+      "request": "Give me a brief explanation.",
+      "context": {
+        "output": {},
+        "expected": {
+          "facts": {
+            "length": "concise",
+            "source": "current-request"
+          }
+        }
+      },
+      "engine": "personalization",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

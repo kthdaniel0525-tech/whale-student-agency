@@ -1,4 +1,5 @@
 import "server-only";
+import { captureUsageContext } from "../ai/usage/context";
 import { Prisma } from "@/generated/prisma/client";
 import { auth } from "../auth/config";
 import { db } from "../db/client";
@@ -285,6 +286,7 @@ export async function appendConversationMessage(
           conversationId: conversation.id,
           userId,
           sequence: updated.nextMessageSequence - 1,
+          requestId: captureUsageContext({ userId }).requestId,
           role: roleToDb[parsed.data.role],
           content: parsed.data.content,
           tokenEstimate: estimateTokens(parsed.data.content),
@@ -296,6 +298,9 @@ export async function appendConversationMessage(
     });
     const message = toConversationMessage(row);
     await persistMessageEmbedding(message, options, userId);
+    if (parsed.data.role === "assistant" && process.env.AI_EVAL_SAMPLING_ENABLED === "true") {
+      await import("../ai/evaluation/sampling").then(m => m.maybeSampleResponse(userId, row.id)).catch(() => undefined);
+    }
     return message;
   } catch (error) {
     if (error instanceof ConversationError) throw error;

@@ -1,10 +1,14 @@
+import { assertEntitlement, hasEntitlement } from "../../entitlements/service";
 import "server-only";
+import { semanticGradingMessages, GRADING_PROMPT_VERSION } from "./grading-prompt";
+import { gradeObjectiveAnswer } from "./objective-grading";
 import { z } from "zod";
 import { auth } from "../../auth/config";
 import { db } from "../../db/client";
 import { getAIProvider } from "../../ai";
 import { AIError } from "../../ai/errors";
 import type { AIProvider } from "../../ai/types";
+import { requestSignals } from "../../ai/routing/complexity";
 import {
   LearningServiceError,
   mapQuizQuestionsToTopics,
@@ -97,12 +101,6 @@ const sourceSchema = z
   })
   .strict();
 
-function normalizedAnswer(value: string): string {
-  const normalized = value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-  if (["t", "yes"].includes(normalized)) return "true";
-  if (["f", "no"].includes(normalized)) return "false";
-  return normalized;
-}
 
 function sourceRequest(request: string): boolean {
   return /\b(?:lecture|pdf|document|uploaded|course notes|professor)\b/i.test(
@@ -398,14 +396,15 @@ export class QuizAgentService {
       throw new QuizAgentError("STORAGE_FAILURE");
     }
     if (!question) throw new QuizAgentError("QUIZ_NOT_FOUND");
+    await assertEntitlement(userId, "ai.quiz");
     const primaryTopicId = question.topicMappings[0]?.topicId;
-    const recentOutcomes = await getRecentAdaptiveOutcomes({
+    const recentOutcomes = await hasEntitlement(userId, "personalization.adaptive") ? await getRecentAdaptiveOutcomes({
       userId,
       agentId: "quiz",
       ...(question.quiz.courseId ? { courseId: question.quiz.courseId } : {}),
       ...(primaryTopicId ? { topicId: primaryTopicId } : {}),
       limit: 12,
-    }).catch(() => []);
+    }).catch(() => []) : [];
     const repeatedErrors = recentOutcomes.filter(
       (outcome) =>
         outcome.outcomeType === "quiz-performance" &&
@@ -418,9 +417,7 @@ export class QuizAgentService {
       "quizId" | "questionId" | "quizAttemptId"
     >;
     if (objective) {
-      const correct =
-        normalizedAnswer(parsed.data.userAnswer) ===
-        normalizedAnswer(question.correctAnswer);
+      const { correct } = gradeObjectiveAnswer(parsed.data.userAnswer, question.correctAnswer);
       grading = {
         correct,
         score: correct ? 1 : 0,
@@ -436,24 +433,14 @@ export class QuizAgentService {
         const provider = await this.#getProvider();
         const result = await provider.generateStructuredOutput({
           schemaName: "quiz_answer_evaluation",
-          usageContext: { userId, agentId: "quiz", operationType: "evaluation" },
+          usageContext: { userId, agentId: "quiz", operationType: "evaluation", promptVersion: GRADING_PROMPT_VERSION },
+          routing: { qualityCritical: question.quiz.difficulty === "HARD", signals: {
+            ...requestSignals(question.prompt),
+            grading: requestSignals(question.prompt).proof ? "proof" : question.type === "LONG_ANSWER" ? "long" : "short",
+          } },
           schema: semanticEvaluationSchema,
           maxOutputTokens: 512,
-          messages: [
-            {
-              role: "system",
-              content:
-                "Grade the answer against the expected answer. Return concise educational feedback. Do not require exact wording when meaning is correct.",
-            },
-            {
-              role: "user",
-              content: JSON.stringify({
-                question: question.prompt,
-                expectedAnswer: question.correctAnswer,
-                userAnswer: parsed.data.userAnswer,
-              }),
-            },
-          ],
+          messages: semanticGradingMessages(question.prompt, question.correctAnswer, parsed.data.userAnswer),
         });
         const validated = semanticEvaluationSchema.safeParse(result.data);
         if (!validated.success) throw new AIError("INVALID_RESPONSE");

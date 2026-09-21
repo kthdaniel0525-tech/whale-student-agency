@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -9,7 +10,7 @@ import { importDriveFile } from "../drive/service";
 import { processNextDocument } from "../documents/processor";
 import { getBackgroundJobPublisher } from "./client";
 import { getBackgroundJobConfig } from "./config";
-import type { BackgroundJob } from "./types";
+import type { BackgroundJob, BackgroundJobResult } from "./types";
 import { BackgroundJobError } from "./errors";
 const payloadSchema = driveResourceSchema.extend({ version: z.literal(1), trackingId: z.string().max(100).optional() }).strict();
 export const importGoogleDriveFileJob: BackgroundJob<DriveResource & {
@@ -19,10 +20,11 @@ export const importGoogleDriveFileJob: BackgroundJob<DriveResource & {
     name: "import-google-drive-file", version: 1, payloadSchema,
     retryPolicy: { limit: 2, delaySeconds: 30, maximumDelaySeconds: 120, exponentialBackoff: true },
     timeoutSeconds: 300, priority: "normal", executionScope: "system", concurrency: { scope: "global", limit: 1 }, debounceSeconds: 1,
-    async handler({ payload, signal }) {
+    async handler({ payload, signal }): Promise<BackgroundJobResult> {
         const account = await db().connectedAccount.findFirst({ where: { id: payload.connectedAccountId, provider: "google" }, select: { userId: true } });
         if (!account)
             return { skipped: true };
+        if (!await hasEntitlement(account.userId, "integration.drive") || !await hasEntitlement(account.userId, "academic.documents")) return { skipped: true, reason: "ENTITLEMENT_REQUIRED" };
         const result = await importDriveFile({ ...payload, userId: account.userId }, { signal });
         // Resume local processing after a worker crash without re-downloading a committed copy.
         const local = result.documentId ?? (await db().externalFileLink.findFirst({ where: { connectedAccountId: payload.connectedAccountId, externalFileId: payload.externalFileId, courseId: payload.courseId, userId: account.userId, syncStatus: "IDLE", document: { userId: account.userId } }, select: { documentId: true } }))?.documentId;

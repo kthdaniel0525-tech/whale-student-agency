@@ -1,4 +1,7 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
+import { workflowObservation } from "@/server/ai/evaluation/observations";
 import "dotenv/config";
+import { guardedWorkflowFixture } from "./guard-fixture";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { auth } from "@/server/auth/config";
@@ -44,7 +47,7 @@ async function fixture(options: { user?: Actor; mastery?: number; confidence?: n
 function boundary(options: { fail?: string; wrongTopic?: boolean; gateTutor?: () => Promise<void> } = {}) {
   const calls: string[] = [], texts: AITextRequest[] = [], structured: AIStructuredRequest<unknown>[] = [];
   const check = (name: string) => { calls.push(name); if (options.fail === name) throw new AIError("PROVIDER_FAILURE"); };
-  const provider: AIProvider = {
+  const transport: AIProvider = {
     async generateText(request) { check("tutor"); texts.push(request); if (options.gateTutor) await options.gateTutor(); return { id: "tutor", model: "fixture", text: "Start induction with a base case. State the inductive hypothesis, then connect k to k+1 using a worked example." }; },
     async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
       check(request.schemaName); structured.push(request as AIStructuredRequest<unknown>);
@@ -60,6 +63,7 @@ function boundary(options: { fail?: string; wrongTopic?: boolean; gateTutor?: ()
       return { id: "fixture", model: "fixture", text: JSON.stringify(data), data: data as T };
     }, streamText() { throw new Error("No new AI pipeline"); }, generateEmbedding() { throw new Error("No documents selected"); },
   };
+  const provider = guardedWorkflowFixture(transport);
   const getProvider = () => provider;
   return { calls, texts, structured, provider, service: new WorkflowService({ getProvider }), quiz: new QuizAgentService(createStudentAgentRegistry(), { getProvider, executor: { getProvider }, router: { allowedAgentIds: ["quiz"] } }) };
 }
@@ -134,6 +138,7 @@ describe.sequential("Weak Topic Recovery through real agents, grading and Learni
     const done = await ai.service.resumeWorkflow({ runId: run.runId, quizAttemptId }, owner.headers);
     expect(done).toMatchObject({ status: "completed", recovery: { status: "recovered" }, completedSteps: ["tutor-1", "quiz-1", "evaluate-1"] });
     expect(done.recovery!.endingState.mastery).toBeGreaterThanOrEqual(70);
+    expect(evaluateDeterministic({ profile: "workflow", request: "Evaluate observed workflow", output: workflowObservation(done), expected: { expectedStatus: "completed", maximumCalls: 12, maximumTutorCalls: 2, maximumQuizCalls: 2, requiredTerms: [] } }).passed).toBe(true);
     expect(done.recovery!.evaluation!.improvement).toBe(done.recovery!.endingState.mastery - 40);
     const current = (await learning.getLearningTopicStates({ userId: owner.id, topicId: f.topic.id }))[0];
     expect(done.recovery!.endingState.mastery).toBe(current.mastery);

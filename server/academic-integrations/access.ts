@@ -1,3 +1,4 @@
+import { assertIntegrationAccess } from "../entitlements/resources";
 import "server-only";
 import { recordIntegrationMetric } from "../integrations/metrics";
 import type { Prisma } from "@/generated/prisma/client";
@@ -10,6 +11,7 @@ import { AcademicIntegrationError, academicError } from "./errors";
 import { academicEvent } from "./events";
 export function academicAccess(registry: AcademicProviderRegistry, credentials?: (connection: AcademicConnection) => AcademicCredentialAccess) {
     const authorize = async (userId: string, accountId: string, capability: AcademicCapability, tx: Prisma.TransactionClient = db()) => {
+        await assertIntegrationAccess(userId, "lms", tx);
         const account = await getOwnedConnection(userId, accountId, tx).catch(cause => { throw academicError(cause); });
         if (!["ACTIVE", "ERROR"].includes(account.status)) {
             academicEvent("AUTH_FAILURE");

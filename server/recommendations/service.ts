@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { auth } from "../auth/config";
 import { STUDENT_AGENT_IDS } from "../agents/types";
@@ -315,7 +316,7 @@ export async function evaluateRecommendations(
   if (!userId || userId.length > 100) throw new RecommendationError("INVALID_REQUEST");
   const now = options.now ?? new Date();
   try {
-    if (!(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
+    if (!await hasEntitlement(userId, "automation.recommendations") || !(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
       return { recommendations: [], created: 0, updated: 0, expired: 0, suppressed: 0 };
     const input = await loadDetectionInput(userId, now);
     const ranked = rankRecommendationCandidates(detectRecommendationCandidates(input))
@@ -324,7 +325,7 @@ export async function evaluateRecommendations(
     let created = 0, updated = 0, expired = 0, suppressed = 0;
     await db().$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
-      if (!(await getNotificationPreferences(userId, transaction)).proactiveRecommendationsEnabled) return;
+      if (!await hasEntitlement(userId, "automation.recommendations", transaction) || !(await getNotificationPreferences(userId, transaction)).proactiveRecommendationsEnabled) return;
       const active = await transaction.recommendation.findMany({ where: { userId, status: "ACTIVE" } });
       const selected = new Set(ranked.map((candidate) => candidate.dedupeKey));
       for (const row of active) {
@@ -370,7 +371,7 @@ export async function evaluateRecommendations(
         created++;
       }
     });
-    if (!(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
+    if (!await hasEntitlement(userId, "automation.recommendations") || !(await getNotificationPreferences(userId)).proactiveRecommendationsEnabled)
       return { recommendations: [], created, updated, expired, suppressed };
     const rows = await db().recommendation.findMany({
       where: { userId, status: "ACTIVE", OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },

@@ -1,3 +1,4 @@
+import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "../db/client";
@@ -43,6 +44,7 @@ export async function deliverNotification(userId: string, reminderId: string,
         (row.snoozedUntil && row.snoozedUntil > now) || (row.expiresAt && row.expiresAt <= now) ||
         (existing?.failedAttempts ?? 0) >= MAX_DELIVERY_ATTEMPTS)
         return { delivered: false, deduplicated: false, failed: false };
+      if (!await hasEntitlement(userId, "automation.notifications", tx) || !await hasEntitlement(userId, "automation.reminders", tx)) return { delivered: false, deduplicated: false, failed: false };
       const preferences = await getNotificationPreferences(userId, tx);
       if (!preferences.inAppEnabled || !reminderTypeEnabled(row.type, preferences) ||
         notificationDeliveryTime(new Date(Math.max(row.scheduledFor.getTime(), row.snoozedUntil?.getTime() ?? 0)), now, preferences, channel) > now)
@@ -102,7 +104,7 @@ export async function deliverNotification(userId: string, reminderId: string,
 export async function deliverUserNotifications(userId: string, options: { now?: Date; channel?: NotificationChannel } = {}) {
   const now = options.now ?? new Date();
   const preferences = await getNotificationPreferences(userId);
-  if (!preferences.inAppEnabled || !preferences.remindersEnabled)
+  if (!await hasEntitlement(userId, "automation.notifications") || !await hasEntitlement(userId, "automation.reminders") || !preferences.inAppEnabled || !preferences.remindersEnabled)
     return { attempted: 0, delivered: 0, deduplicated: 0, failed: 0 };
   const rows = await db().reminder.findMany({ where: { userId, ...dueRemindersWhere(now) },
     orderBy: [{ priorityScore: "desc" }, { id: "asc" }], take: 50, select: { id: true } });

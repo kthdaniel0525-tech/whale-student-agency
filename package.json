@@ -29,7 +29,10 @@
     "documents:worker": "node scripts/document-worker.mjs",
     "jobs:worker": "node --conditions=react-server --import tsx scripts/background-worker.ts",
     "jobs:trigger": "node --conditions=react-server --import tsx scripts/trigger-background-job.ts",
-    "embeddings:prepare": "node --conditions=react-server --import tsx scripts/prepare-embeddings.ts"
+    "embeddings:prepare": "node --conditions=react-server --import tsx scripts/prepare-embeddings.ts",
+    "evals": "node --conditions=react-server --import tsx scripts/run-evals.ts",
+    "test:evals": "vitest run tests/ai-evaluation.test.ts",
+    "plans:sync": "node --conditions=react-server --import tsx scripts/configure-plans.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

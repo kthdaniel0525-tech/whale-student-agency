@@ -117,6 +117,14 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await cleanup(); await db().jobRun.deleteMany({ where: { resourceId: { in: resources } } }); await db().user.deleteMany({ where: { id: { in: [owner.id, other.id] } } }); await db().$disconnect(); });
 describe.sequential("Provider-independent academic import", () => {
+    it("rejects an oversized LMS file batch before downloads or embedding fan-out", async () => {
+        const sample = provider.files.get("math")![0];
+        provider.files.set("math", Array.from({ length: academicSyncConfig().maxFiles + 1 }, (_, i) => ({ ...sample, externalId: `batch-${i}` })));
+        await expect(service.preview(owner.id, input(filesOnly))).rejects.toMatchObject({ code: "LIMIT" });
+        expect(provider.calls.some(call => call.startsWith("download:"))).toBe(false);
+        expect(queued).toHaveLength(0);
+        expect(await db().document.count({ where: { userId: owner.id } })).toBe(0);
+    });
     it("coalesces throttled course requests through a shared cooldown and recovers afterwards", async () => {
         const list = vi.spyOn(provider, "listCourses").mockRejectedValueOnce(new AcademicIntegrationError("PROVIDER_RATE_LIMITED"));
         await expect(service.listCourses(owner.id, accountId)).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED", status: 429 });

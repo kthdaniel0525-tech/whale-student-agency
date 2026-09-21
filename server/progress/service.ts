@@ -1,3 +1,4 @@
+import { assertEntitlement } from "../entitlements/service";
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { auth } from "../auth/config";
@@ -180,6 +181,7 @@ export async function getStudentProgress(
     query: { disableRefresh: true },
   });
   if (!session?.user.id || session.user.id !== userId) throw new ProgressError();
+  await assertEntitlement(userId, "academic.progress");
 
   const now = options.now ?? new Date();
   const range = options.range ?? "semester";

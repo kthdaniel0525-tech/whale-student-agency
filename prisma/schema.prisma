@@ -171,6 +171,12 @@ model User {
   oauthConnectionSessions OAuthConnectionSession[]
   externalFileLinks ExternalFileLink[]
   aiUsageRecords AIUsageRecord[]
+  aiEvaluations AIEvaluationRecord[]
+  aiFeedback AIUserFeedback[]
+  subscription UserSubscription?
+  entitlementOverrides UserEntitlementOverride[]
+  entitlementEvents EntitlementEvent[]
+  usageAdmissions EntitlementUsageAdmission[]
 
   externalCourseLinks ExternalCourseLink[]
   externalAssignmentLinks ExternalAssignmentLink[]
@@ -178,14 +184,57 @@ model User {
 
 }
 
+// Safety state contains hashes/counters/references only, never prompt content.
+model AIGuardState {
+  key String @id
+  data Json
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
+model AIGuardEvent {
+  provider String?
+  model String?
+  id String @id @default(cuid())
+  userId String?
+  requestId String
+  type String
+  agentId String?
+  workflowId String?
+  modelTier String?
+  snapshot Json
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
 // Immutable provider attempts. Optional attribution IDs survive resource deletion;
 // ownership is checked by the server writer, and account deletion removes usage.
 model AIUsageRecord {
+  promptVersion String?
+  routingVersion String?
+  contextVersion String?
   id String @id
   userId String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider String
   model String
+  selectedModel String?
+  selectedTier String?
+  routingComplexity String?
+  routingReasonCode String?
+  routingMethod String?
+  primaryProvider      String?
+  primaryModel         String?
+  attemptNumber        Int?
+  fallbackDepth        Int?
+  fallbackFromProvider String?
+  fallbackFromModel    String?
+  finalProvider        String?
+  failureClass         String?
+  streamStarted        Boolean?
+  tokensEmitted        Int?
+  fallbackUsed Boolean?
   operationType String
   agentId String?
   workflowId String?
@@ -222,6 +271,7 @@ model AIUsageRecord {
   @@index([userId, provider, model, createdAt])
   @@index([userId, requestId])
   @@index([userId, operationType, createdAt])
+  @@index([userId, selectedTier, createdAt])
 }
 
 enum JobRunStatus {
@@ -448,6 +498,8 @@ model RateLimit {
 }
 
 model Profile {
+  aiEvaluationConsentVersion String?
+  aiEvaluationConsentAt DateTime?
   id                    String                @id @default(cuid())
   userId                String                @unique
   school                String
@@ -513,6 +565,8 @@ model Conversation {
 }
 
 model ConversationMessage {
+  requestId String?
+  aiFeedback AIUserFeedback[]
   id             String                      @id @default(cuid())
   conversationId String
   userId         String
@@ -1475,4 +1529,132 @@ model ExternalExamLink {
   @@index([userId])
   @@unique([examId, userId])
 
+}
+
+// Scores/versions only: never raw prompts, answers, source text or judge reasoning.
+model AIEvaluationRecord {
+  id String @id @default(cuid())
+  deduplicationKey String @unique
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId String?
+  usageRecordId String?
+  messageId String?
+  feedbackId String?
+  agentId String?
+  workflowId String?
+  profile String
+  evaluationType String
+  evaluatorVersion String
+  datasetVersion String
+  promptVersion String
+  routingVersion String
+  contextVersion String
+  model String?
+  provider String?
+  selectedTier String?
+  fallbackUsed Boolean?
+  judgeModel String?
+  score Float?
+  passed Boolean?
+  dimensions Json
+  failures String[]
+  unmeasured String[]
+  metrics Json
+  checks Json
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+  @@index([profile, evaluationType, createdAt])
+  @@index([usageRecordId])
+  @@index([userId, requestId])
+  @@index([feedbackId])
+}
+
+// Private, optional user content. Comments are excluded from quality aggregation.
+model AIUserFeedback {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messageId String
+  message ConversationMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  requestId String?
+  usageRecordId String?
+  agentId String?
+  workflowId String?
+  rating Int
+  reasonCode String?
+  comment String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, messageId])
+  @@index([userId, createdAt])
+  @@index([usageRecordId])
+}
+
+// Catalog is independent of billing providers. Values are validated by the service.
+model Plan {
+  id String @id @default(cuid())
+  code String @unique
+  name String
+  description String?
+  active Boolean @default(true)
+  internal Boolean @default(false)
+  version Int @default(1)
+  entitlements Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  subscriptions UserSubscription[]
+}
+model UserSubscription {
+  id String @id @default(cuid())
+  userId String @unique
+  planId String
+  status String @default("active")
+  startedAt DateTime @default(now())
+  currentPeriodStart DateTime?
+  currentPeriodEnd DateTime?
+  cancelAtPeriodEnd Boolean @default(false)
+  trialEndsAt DateTime?
+  graceUntil DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  @@index([planId, status])
+}
+model UserEntitlementOverride {
+  id String @id @default(cuid())
+  userId String
+  entitlementKey String
+  value Json
+  expiresAt DateTime?
+  reason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, entitlementKey])
+}
+model EntitlementEvent {
+  id String @id @default(cuid())
+  userId String
+  type String
+  details Json
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+}
+// AI entries reserve in-flight capacity only; AIUsageRecord remains the accounting
+// source. Unknown/failed persistence holds capacity conservatively until period end.
+// Document entries record accepted processing, including retries/replacements.
+model EntitlementUsageAdmission {
+  id String @id @default(cuid())
+  userId String
+  kind String
+  requestId String
+  reservedTokens Int @default(0)
+  periodEnd DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, kind, createdAt])
+  @@index([periodEnd])
 }

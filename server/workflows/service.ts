@@ -1,3 +1,5 @@
+import { assertWorkflowAllowance } from "../entitlements/resources";
+import { checkAIUsageAllowance } from "../entitlements/usage";
 import "server-only";
 import { withAIUsageContext } from "../ai/usage/context";
 import { z } from "zod";
@@ -127,6 +129,8 @@ export class WorkflowService {
     const parsed = workflowInputSchema.safeParse(raw);
     if (!parsed.success) throw new WorkflowError("INVALID_REQUEST");
     const input = parsed.data;
+    await db().$transaction(tx => assertWorkflowAllowance(userId, input.workflowId, tx, true));
+    await checkAIUsageAllowance(userId, { workflowId: input.workflowId });
     const cache = new ContextReadCache();
     if (input.conversationId) {
       try { await getConversationScope(input.conversationId, headers); }

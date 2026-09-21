@@ -1,3 +1,5 @@
+import { checkAIUsageAllowance } from "../../entitlements/usage";
+import { captureUsageContext } from "../../ai/usage/context";
 import "server-only";
 import { withAIUsageContext } from "../../ai/usage/context";
 import { auth } from "../../auth/config";
@@ -67,6 +69,7 @@ export class AgentService<Extension extends string = never> {
             new AgentExecutionError("INVALID_REQUEST").message,
           );
         }
+        await checkAIUsageAllowance(session.user.id, captureUsageContext({ agentId: parsed.data.preferredAgentId }));
         const { request, preferredAgentId, courseId, examId, assignmentId, projectIds, documentIds, conversation } =
           parsed.data;
         stage = "routing";

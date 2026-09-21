@@ -1,3 +1,4 @@
+import { admitDocumentProcessing } from "../entitlements/resources";
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { randomUUID } from "node:crypto";
@@ -86,6 +87,7 @@ export async function uploadDocument(
             "Your library limit is 100 documents or 100 MB. Delete a document before uploading more.",
             409,
           );
+        await admitDocumentProcessing(userId, bytes.length, tx, true);
         await storage.put(key, bytes);
         const document = await tx.document.create({
           data: {
@@ -119,8 +121,10 @@ export async function deleteDocument(userId: string, id: string) {
   return { success: true, cleanupPending };
 }
 export async function retryDocument(userId: string, id: string) {
-  await getDocument(userId, id);
-  const result = await db().document.updateMany({
+  const document = await getDocument(userId, id);
+  await db().$transaction(async tx => {
+    await admitDocumentProcessing(userId, document.fileSize, tx);
+    const updated = await tx.document.updateMany({
     where: { id, userId, processingStatus: "FAILED" },
     data: {
       processingStatus: "UPLOADED",
@@ -130,11 +134,8 @@ export async function retryDocument(userId: string, id: string) {
       leaseExpiresAt: null,
     },
   });
-  if (!result.count)
-    throw new DocumentError(
-      "Only failed documents can be retried. Processing may already be in progress.",
-      409,
-    );
+    if (!updated.count) throw new DocumentError("Only failed documents can be retried.", 409);
+  });
   return getDocument(userId, id);
 }
 export async function originalFile(userId: string, id: string) {

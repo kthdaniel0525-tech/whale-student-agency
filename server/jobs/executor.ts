@@ -1,4 +1,6 @@
+import { canRunBackgroundFeature } from "../entitlements/resources";
 import "server-only";
+import { withAIUsageContext } from "../ai/usage/context";
 import type { JobResult, JobWithMetadata } from "pg-boss";
 import { db } from "../db/client";
 import {
@@ -98,12 +100,13 @@ export async function executeBackgroundJob<Payload extends object>(
     if (invalidRun || invalidUserIdentity || invalidSystemIdentity) {
       throw new BackgroundJobError("AUTHORIZATION_ERROR");
     }
-    const result = await definition.handler({
+    const allowed = !run.userId || await canRunBackgroundFeature(run.userId, definition.name);
+    const result = !allowed ? { skipped: true, reason: "ENTITLEMENT_REQUIRED" } : await withAIUsageContext({ ...(run.userId ? { userId: run.userId } : {}), requestId: `job:${run.id}`, backgroundJobId: run.id, guardFeature: definition.name, guardProfile: "BACKGROUND" }, () => definition.handler({
       payload,
       signal: job.signal,
       attempt,
       jobRunId: run.id,
-    });
+    }));
     const durationMs = Date.now() - started;
     await db().jobRun.updateMany({
       where: { id: run.id, queueJobId: job.id },

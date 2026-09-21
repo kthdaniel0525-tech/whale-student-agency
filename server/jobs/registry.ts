@@ -1,4 +1,5 @@
 import "server-only";
+import { evaluateAIResponseJob } from "./evaluate-ai-response";
 import { syncExternalCourseJob, scheduleExternalCourseSyncJob } from "./sync-external-course";
 import { importGoogleDriveFileJob } from "./import-google-drive-file";
 import { syncGoogleCalendarJob, scheduleGoogleCalendarSyncJob } from "./sync-google-calendar";
@@ -9,6 +10,7 @@ import { deliverUserNotificationsJob, deliverReadyNotificationsJob } from "./del
 import { scheduledRecommendationRefreshJob } from "./scheduled-recommendations";
 
 export const BACKGROUND_JOBS = [
+  evaluateAIResponseJob,
   syncExternalCourseJob, scheduleExternalCourseSyncJob,
   importGoogleDriveFileJob,
   syncGoogleCalendarJob, scheduleGoogleCalendarSyncJob,

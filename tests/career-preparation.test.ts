@@ -1,3 +1,5 @@
+import { evaluateDeterministic } from "@/server/ai/evaluation/deterministic";
+import { workflowObservation } from "@/server/ai/evaluation/observations";
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -122,6 +124,7 @@ describe.sequential("Career Preparation workflow", () => {
     const ai = boundary(analysis(fixture.project.id));
     const result = await ai.service.runWorkflow({ workflowId: "career-preparation", goal: "Make a career preparation plan.", projectIds: [fixture.project.id], applicationTimeline: "in 2 weeks", availableWeeklyMinutes: 120 }, owner.headers);
     expect(result).toMatchObject({ status: "completed", careerPreparation: { targetRole: "Software Engineering Intern", planId: expect.any(String) } });
+    expect(evaluateDeterministic({ profile: "workflow", request: "Evaluate observed workflow", output: workflowObservation(result), expected: { expectedStatus: "completed", maximumCalls: 4, maximumTutorCalls: 2, maximumQuizCalls: 2, requiredTerms: [] } }).passed).toBe(true);
     const state = (await db().workflowRun.findUniqueOrThrow({ where: { id: result.runId } })).context as Record<string, unknown>;
     expect(state).toMatchObject({ careerPreparation: { targetRole: "Software Engineering Intern", targetIndustry: "Education Technology" } });
   });

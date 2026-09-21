@@ -694,6 +694,7 @@ describe.sequential("owned quiz retrieval and answer grading", () => {
     expect(boundary.structured).toHaveBeenCalledTimes(1);
     const input = boundary.structured.mock.calls[0][0];
     expect(input.schemaName).toBe("quiz_answer_evaluation");
+    expect(input.routing).toMatchObject({ signals: { grading: "short" } });
     expect(input.maxOutputTokens).toBe(512);
     expect(input.messages).toHaveLength(2);
     expect(JSON.parse(input.messages[1].content)).toEqual({
@@ -702,6 +703,18 @@ describe.sequential("owned quiz retrieval and answer grading", () => {
       userAnswer: "It proves the next case from the hypothesis.",
     });
     expect(JSON.stringify(input.messages)).not.toMatch(/Lecture 5|Quiz Owner|PRIVATE CS/);
+  });
+
+  it.each(["long", "proof", "hard"] as const)("provides quality signals for %s semantic grading", async kind => {
+    const questionType = kind === "long" ? "long-answer" : "short-answer";
+    const boundary = setup(quizData(1, questionType));
+    const quiz = await boundary.service.generateQuiz({ request: "Give me one written question", count: 1, questionType }, owner.headers);
+    if (kind === "proof") await db().quizQuestion.update({ where: { id: quiz.questions[0].id }, data: { prompt: "Prove the theorem using induction." } });
+    if (kind === "hard") await db().quiz.update({ where: { id: quiz.id }, data: { difficulty: "HARD" } });
+    boundary.structured.mockClear();
+    await boundary.service.evaluateAnswer({ quizId: quiz.id, questionId: quiz.questions[0].id, userAnswer: "My attempt" }, owner.headers);
+    expect(boundary.structured).toHaveBeenCalledTimes(1);
+    expect(boundary.structured.mock.calls[0][0].routing).toMatchObject({ qualityCritical: kind === "hard", signals: { grading: kind === "hard" ? "short" : kind } });
   });
 
   it("prevents cross-user quiz retrieval and grading without revealing existence", async () => {

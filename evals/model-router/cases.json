@@ -1,0 +1,165 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "router-0",
+      "profile": "model-router",
+      "request": "tutor",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "BALANCED"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "tutor",
+        "operationType": "text-generation",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {}
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "router-1",
+      "profile": "model-router",
+      "request": "tutor",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "STRONG"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "tutor",
+        "operationType": "text-generation",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {
+          "proof": true
+        }
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "router-2",
+      "profile": "model-router",
+      "request": "quiz",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "STRONG"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "quiz",
+        "operationType": "evaluation",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {
+          "grading": "proof"
+        }
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "router-3",
+      "profile": "model-router",
+      "request": "study-planner",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "STRONG"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "study-planner",
+        "operationType": "structured-output",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {
+          "planning": true,
+          "courseCount": 4,
+          "deadlineCount": 5
+        }
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "router-4",
+      "profile": "model-router",
+      "request": "career",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "STRONG"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "career",
+        "operationType": "text-generation",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {
+          "task": "career-strategy"
+        }
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "router-multi-step-proof",
+      "profile": "model-router",
+      "request": "tutor",
+      "context": {
+        "output": {},
+        "expected": {
+          "minimumTier": "REASONING"
+        }
+      },
+      "engine": "model-router",
+      "input": {
+        "agentId": "tutor",
+        "operationType": "text-generation",
+        "contextTokens": 1000,
+        "outputTokens": 1000,
+        "signals": {
+          "proof": true,
+          "reasoningSteps": 5,
+          "crossDomain": true,
+          "sourceCount": 3
+        }
+      },
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { auth } from "@/server/auth/config";
 import { db } from "@/server/db/client";
 import { recordQuestionEvaluation } from "@/server/learning";
@@ -189,6 +189,8 @@ async function fixture() {
   return { math, comp, weak, strong, lowEvidence, developing, quiz, questions, exam, plan };
 }
 
+afterEach(() => vi.useRealTimers());
+
 beforeAll(async () => {
   owner = await actor("Progress Owner");
   foreign = await actor("Progress Foreign");
@@ -196,6 +198,9 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.restoreAllMocks();
+  // Context Builder and the aggregation share one deterministic clock.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   await reset(owner.id);
   await reset(foreign.id);
 });

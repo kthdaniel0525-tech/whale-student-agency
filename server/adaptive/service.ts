@@ -1,3 +1,4 @@
+import { hasEntitlement, assertEntitlement } from "../entitlements/service";
 import "server-only";
 import { z } from "zod";
 import { auth } from "../auth/config";
@@ -104,6 +105,7 @@ export async function recordAdaptiveOutcome(
       where: { userId_evidenceKey: { userId: input.userId, evidenceKey: input.evidenceKey } },
     });
     if (existing) return existing;
+    await assertEntitlement(input.userId, "personalization.adaptive", transaction);
     return transaction.adaptiveOutcome.create({
       data: {
         userId: input.userId,
@@ -204,7 +206,7 @@ export async function prepareAdaptiveStrategy(
 ): Promise<PreparedAdaptiveStrategy> {
   const userId = await sessionUser(requestHeaders);
   let recentOutcomes: AdaptiveOutcomeRecord[] = [];
-  if (userId) {
+  if (userId && await hasEntitlement(userId, "personalization.adaptive")) {
     try {
       if (!STUDENT_AGENT_IDS.includes(input.agentId as StudentAgentId))
         throw new Error("UNSUPPORTED_ADAPTIVE_AGENT");
