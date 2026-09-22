@@ -6,7 +6,7 @@ import {
   observeBackgroundJobBoss,
   registerBackgroundJobWorkers,
 } from "./queue";
-import { registerBillingReconciliationSchedule, registerRecommendationRefreshSchedule, registerNotificationDeliverySchedule, registerOAuthCleanupSchedule, registerCalendarSyncSchedule, registerAcademicSyncSchedule } from "./schedule";
+import { registerAccountDeletionSchedule, registerBillingReconciliationSchedule, registerRecommendationRefreshSchedule, registerNotificationDeliverySchedule, registerOAuthCleanupSchedule, registerCalendarSyncSchedule, registerAcademicSyncSchedule } from "./schedule";
 
 export async function startBackgroundJobWorker(
   boss: PgBoss = createBackgroundJobBoss("worker"),
@@ -21,6 +21,7 @@ export async function startBackgroundJobWorker(
   await registerCalendarSyncSchedule(boss);
   await registerAcademicSyncSchedule(boss);
   await registerBillingReconciliationSchedule(boss);
+  await registerAccountDeletionSchedule(boss);
   return boss;
 }
 

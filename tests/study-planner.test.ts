@@ -825,6 +825,23 @@ describe.sequential("Study Planner replanning, study-now, and ownership", () => 
     })).resolves.not.toBeNull();
   });
 
+  it("keeps plan status and totals consistent across concurrent sibling-task completions", async () => {
+    const initial = await createForReplanning(setupBoundary());
+    const first = initial.plan.days[0].sessions[0];
+    const second = await db().studyTask.create({ data: {
+      userId: owner.id, studyPlanId: initial.plan.id, date: new Date(today()), title: "Concurrent review",
+      activityType: "REVIEW", durationMinutes: 30, priority: 60, reason: "Review prior practice",
+    } });
+    await Promise.all([
+      initial.boundary.service.updateTaskStatus(first.id, "completed", owner.headers),
+      initial.boundary.service.updateTaskStatus(second.id, "completed", owner.headers),
+    ]);
+    const saved = await initial.boundary.service.getPlan(initial.plan.id, owner.headers);
+    expect(saved.status).toBe("completed");
+    expect(saved.totalPlannedMinutes).toBe(first.durationMinutes + second.durationMinutes);
+    expect(saved.days.flatMap((day) => day.sessions).every((task) => task.status === "completed")).toBe(true);
+  });
+
   it("protects plans and tasks from cross-user reads and writes", async () => {
     const initial = await createForReplanning(setupBoundary());
     const taskId = initial.plan.days[0].sessions[0].id;

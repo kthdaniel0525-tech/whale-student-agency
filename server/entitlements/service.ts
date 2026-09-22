@@ -1,3 +1,4 @@
+import { AccountUnavailableError } from "../privacy/account-state";
 import "server-only";
 import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
@@ -52,6 +53,8 @@ export function subscriptionIsEffective(subscription: { status: string; currentP
 /** No cross-request cache: plan/override edits and emergency flags apply on the
  * next boundary, including a queued job or the next step of an active workflow. */
 export async function getUserEntitlements(userId: string, tx: EntitlementClient = db(), now = new Date()) {
+  const user = await tx.user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true } });
+  if (!user || user.deletionRequestedAt) throw new AccountUnavailableError();
   const subscription = await ensureDefaultSubscription(userId, tx);
   const effective = subscription.plan.active && subscriptionIsEffective(subscription, now);
   const plan = effective ? subscription.plan : await planByCode(basePlanCode(), tx);

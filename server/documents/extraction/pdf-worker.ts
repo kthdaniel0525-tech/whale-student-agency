@@ -1,5 +1,4 @@
 import "server-only";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { DocumentError, MAX_FILE_BYTES, MAX_PAGES, MAX_TEXT_CHARS } from "../config";
@@ -57,7 +56,14 @@ const { parentPort, workerData } = require("node:worker_threads");
 export async function extractPdfPages(bytes: Uint8Array, timeoutMs = 20_000): Promise<ExtractedPage[]> {
   if (!bytes.length || bytes.length > MAX_FILE_BYTES)
     throw new DocumentError("Choose a non-empty file up to 10 MB.", 413);
-  const moduleUrl = pathToFileURL(createRequire(import.meta.url).resolve("pdfjs-dist/legacy/build/pdf.mjs")).href;
+  // Use Node's runtime resolver: Turbopack rewrites a statically imported
+  // createRequire(...).resolve(...) to a module ID instead of a filesystem path.
+  // next.config.ts explicitly traces this dynamically resolved worker dependency.
+  // Anchor to the deployed app, since Webpack inlines import.meta.url with the
+  // build machine's source path. Both Node lookups must remain runtime operations.
+  const runtimePackage = process.getBuiltinModule("path").join(process.cwd(), "package.json");
+  const nodeRequire = process.getBuiltinModule("module").createRequire(runtimePackage);
+  const moduleUrl = pathToFileURL(nodeRequire.resolve("pdfjs-dist/legacy/build/pdf.mjs")).href;
   return new Promise((resolve, reject) => {
     const worker = new Worker(workerSource, {
       eval: true, env: {}, stdout: true, stderr: true,

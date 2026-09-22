@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  agentRules: false,
   poweredByHeader: false,
   async headers() {
     // Next's hydration/theme bootstrap currently requires inline scripts; do
@@ -20,8 +21,15 @@ const nextConfig: NextConfig = {
     ] }];
   },
   // OAuth callback query strings contain one-time credentials. Never log them.
-  logging: { incomingRequests: { ignore: [/\/api\/student\/integrations\/[^/]+\/callback/] } },
+  logging: { incomingRequests: { ignore: [/\/api\/student\/integrations\/[^/]+\/callback/, /\/api\/auth(?:\/|$)/, /\/billing\/(?:success|cancelled)/] } },
   outputFileTracingExcludes: { "/*": ["./.local/**/*", "./.env*"] },
+  // The isolated PDF worker resolves these at runtime, outside the bundler.
+  // Include both PDF.js modules and its native DOMMatrix/canvas dependency.
+  outputFileTracingIncludes: { "/*": [
+    "./node_modules/pdfjs-dist/legacy/build/*.mjs",
+    "./node_modules/pdfjs-dist/package.json",
+    "./node_modules/@napi-rs/canvas*/**/*",
+  ] },
   serverExternalPackages: [
     "@huggingface/transformers",
     "onnxruntime-node",

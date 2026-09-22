@@ -105,62 +105,84 @@ export function createCalendarWriteService(calendar: ReturnType<typeof createGoo
         if (!link)
             link = await db().externalEventLink.upsert({ where: { studyTaskId_connectedAccountId_externalCalendarId: key }, create: { ...key, userId, externalEventId: randomUUID().replaceAll("-", "") }, update: {} });
         const id = link.id;
-        const result = await db().$transaction(async (tx) => {
+        const token = randomUUID();
+        const signal = AbortSignal.timeout(55000);
+        // Short database claim; all provider calls happen outside transactions.
+        const claim = await db().$transaction(async (tx) => {
+            await tx.$queryRaw `SELECT id FROM "ConnectedAccount" WHERE id=${connectedAccountId} AND "userId"=${userId} FOR UPDATE`;
+            await calendar.integration.assertProviderAccess(userId, connectedAccountId, "calendar-write", "google", tx);
+            const account = await tx.connectedAccount.findFirstOrThrow({ where: { id: connectedAccountId, userId } });
             await tx.$queryRaw `SELECT id FROM "ExternalEventLink" WHERE id=${id} AND "userId"=${userId} FOR UPDATE`;
-            await tx.$queryRaw `SELECT id FROM "StudyTask" WHERE id=${studyTaskId} AND "userId"=${userId} FOR UPDATE`;
-            let current = await tx.externalEventLink.findFirstOrThrow({ where: { id, userId } });
+            const current = await tx.externalEventLink.findFirstOrThrow({ where: { id, userId } });
             const fresh = await tx.studyTask.findFirst({ where: { id: studyTaskId, userId, updatedAt: task.updatedAt } });
-            if (!fresh)
-                throw new IntegrationError("CONNECTION_BUSY");
-            if (action === "create" && current.status === "LINKED")
-                return current;
-            if (action === "remove" && current.status === "REMOVED")
-                return current;
-            // Re-adding a confirmed-deleted event is an explicit new operation. Reserve a new
-            // ID in a separate durable step (below) before allowing its POST.
-            if (action === "create" && ["MISSING", "REMOVED"].includes(current.status))
-                throw new IntegrationError("RESOURCE_NOT_FOUND");
-            return calendar.using(userId, connectedAccountId, "calendar-write", async (adapter) => {
+            if (!fresh) throw new IntegrationError("CONNECTION_BUSY");
+            if (action === "create" && current.status === "LINKED" || action === "remove" && current.status === "REMOVED")
+                return { current, skip: true, credentialVersion: account.credentialVersion };
+            if (current.writeLeaseUntil && current.writeLeaseUntil > new Date()) throw new IntegrationError("CONNECTION_BUSY");
+            if (action === "create" && ["MISSING", "REMOVED"].includes(current.status)) throw new IntegrationError("RESOURCE_NOT_FOUND");
+            await tx.externalEventLink.update({ where: { id }, data: { writeLeaseToken: token, writeLeaseUntil: new Date(Date.now() + 60000) } });
+            return { current, skip: false, credentialVersion: account.credentialVersion };
+        });
+        if (claim.skip) return publicLink(claim.current, task);
+        const current = claim.current;
+        async function beforeWrite() {
+            signal.throwIfAborted();
+            await calendar.integration.assertProviderAccess(userId, connectedAccountId, "calendar-write", "google");
+            const valid = await db().externalEventLink.findFirst({ where: { id, userId, writeLeaseToken: token, writeLeaseUntil: { gt: new Date() },
+                connectedAccount: { credentialVersion: claim.credentialVersion, status: { in: ["ACTIVE", "ERROR"] } }, studyTask: { updatedAt: task.updatedAt } } });
+            if (!valid) throw new IntegrationError("CONNECTION_BUSY");
+            if (action !== "remove" && !await db().calendarIntegrationPreference.count({ where: { userId, connectedAccountId, externalCalendarId: calendarId, allowStudyWrites: true } }))
+                throw new IntegrationError("AUTHORIZATION_REQUIRED");
+        }
+        let result;
+        try {
+            const status = await calendar.using(userId, connectedAccountId, "calendar-write", async (adapter) => {
                 const external = await adapter.getEvent(calendarId, current.externalEventId);
                 if (external && external.status !== "cancelled" && external.extendedProperties?.private?.studyLinkId !== current.id)
                     throw new IntegrationError("RESOURCE_CONFLICT");
                 if (action === "remove") {
-                    if (external && external.status !== "cancelled")
-                        await adapter.remove(calendarId, current.externalEventId);
-                    return tx.externalEventLink.update({ where: { id }, data: { status: "REMOVED" } });
+                    await beforeWrite();
+                    if (external && external.status !== "cancelled") await adapter.remove(calendarId, current.externalEventId);
+                    return "REMOVED";
                 }
-                if ((!external || external.status === "cancelled") && action === "update")
-                    return tx.externalEventLink.update({ where: { id }, data: { status: "MISSING" } });
-                const selection = await tx.calendarIntegrationPreference.findFirst({ where: { userId, connectedAccountId, externalCalendarId: calendarId, allowStudyWrites: true } });
-                if (!selection)
-                    throw new IntegrationError("AUTHORIZATION_REQUIRED");
+                if ((!external || external.status === "cancelled") && action === "update") return "MISSING";
+                const selection = await db().calendarIntegrationPreference.findFirst({ where: { userId, connectedAccountId, externalCalendarId: calendarId, allowStudyWrites: true } });
+                if (!selection) throw new IntegrationError("AUTHORIZATION_REQUIRED");
                 const freshEvents = await adapter.events({ connectedAccountId, calendarId, timezone: selection.timezone, start: task.scheduledStart!, end: task.scheduledEnd!, blockAllDay: selection.blockAllDay });
                 const window: TimeWindow = { start: task.scheduledStart!.toISOString(), end: task.scheduledEnd!.toISOString(), durationMinutes: task.durationMinutes };
                 if (freshEvents.events.some(e => e.externalId !== current.externalEventId && e.blocksTime && e.start && e.end && overlaps(window, { start: e.start, end: e.end })))
                     throw new IntegrationError("CALENDAR_CONFLICT");
+                await beforeWrite();
                 const body = { summary: task.title.slice(0, 200), description: task.course ? `Study session · ${task.course.courseCode}` : "Study session", start: { dateTime: window.start, timeZone: task.scheduledTimezone ?? selection.timezone }, end: { dateTime: window.end, timeZone: task.scheduledTimezone ?? selection.timezone }, extendedProperties: { private: { studyLinkId: current.id } }, reminders: { useDefault: false } };
                 if (external && external.status !== "cancelled") {
-                    // Retry of an uncertain create acknowledges the existing event; only explicit
-                    // update may change it. No implicit synchronization from task edits.
-                    if (action === "update")
-                        await adapter.update(calendarId, current.externalEventId, body);
-                }
-                else {
-                    try {
-                        await adapter.create(calendarId, current.externalEventId, body);
-                    }
+                    if (action === "update") await adapter.update(calendarId, current.externalEventId, body);
+                } else {
+                    try { await adapter.create(calendarId, current.externalEventId, body); }
                     catch (e) {
-                        if (!(e instanceof IntegrationError && e.code === "RESOURCE_CONFLICT"))
-                            throw e;
+                        if (!(e instanceof IntegrationError && e.code === "RESOURCE_CONFLICT")) throw e;
                         const found = await adapter.getEvent(calendarId, current.externalEventId);
-                        if (found?.extendedProperties?.private?.studyLinkId !== id || found.status === "cancelled")
-                            throw new IntegrationError("RESOURCE_CONFLICT");
+                        if (found?.extendedProperties?.private?.studyLinkId !== id || found.status === "cancelled") throw new IntegrationError("RESOURCE_CONFLICT");
                     }
                 }
-                current = await tx.externalEventLink.update({ where: { id }, data: { status: "LINKED", syncedStart: task.scheduledStart, syncedEnd: task.scheduledEnd, taskRevision: task.updatedAt } });
-                return current;
+                return "LINKED";
+            }, signal);
+            result = await db().$transaction(async tx => {
+                await tx.$queryRaw `SELECT id FROM "ConnectedAccount" WHERE id=${connectedAccountId} AND "userId"=${userId} FOR UPDATE`;
+                await calendar.integration.assertProviderAccess(userId, connectedAccountId, "calendar-write", "google", tx);
+                const changed = await tx.externalEventLink.updateMany({ where: { id, userId, writeLeaseToken: token, writeLeaseUntil: { gt: new Date() },
+                    connectedAccount: { credentialVersion: claim.credentialVersion, status: { in: ["ACTIVE", "ERROR"] } } }, data: {
+                        status, writeLeaseToken: null, writeLeaseUntil: null,
+                        // Keep the exact snapshot sent, so edits during HTTP remain visibly unsynced.
+                        ...(status === "LINKED" ? { syncedStart: task.scheduledStart, syncedEnd: task.scheduledEnd, taskRevision: task.updatedAt } : {}),
+                    } });
+                if (!changed.count) throw new IntegrationError("CONNECTION_BUSY");
+                return tx.externalEventLink.findFirstOrThrow({ where: { id, userId } });
             });
-        }, { timeout: 60000, maxWait: 10000 });
+        } finally {
+            // A stale worker cannot clear a newer lease. Unknown external outcomes keep
+            // the durable event ID, allowing the next explicit retry to reconcile it.
+            await db().externalEventLink.updateMany({ where: { id, userId, writeLeaseToken: token }, data: { writeLeaseToken: null, writeLeaseUntil: null } });
+        }
         await db().integrationSyncState.updateMany({ where: { connectedAccountId, integrationType: "calendar-read" }, data: { lastSuccessfulSyncAt: null } });
         return publicLink(result, task);
     });
@@ -169,7 +191,7 @@ export function createCalendarWriteService(calendar: ReturnType<typeof createGoo
         // PENDING ID instead, so retry after a dropped response remains idempotent.
         await ownedTask(input.userId, input.studyTaskId);
         await calendar.using(input.userId, input.connectedAccountId, "calendar-write", async () => { });
-        await db().externalEventLink.updateMany({ where: { userId: input.userId, studyTaskId: input.studyTaskId, connectedAccountId: input.connectedAccountId, externalCalendarId: input.calendarId, status: { in: ["MISSING", "REMOVED"] } }, data: { status: "PENDING", externalEventId: randomUUID().replaceAll("-", "") } });
+        await db().externalEventLink.updateMany({ where: { userId: input.userId, studyTaskId: input.studyTaskId, connectedAccountId: input.connectedAccountId, externalCalendarId: input.calendarId, status: { in: ["MISSING", "REMOVED"] }, OR: [{ writeLeaseUntil: null }, { writeLeaseUntil: { lte: new Date() } }] }, data: { status: "PENDING", externalEventId: randomUUID().replaceAll("-", "") } });
         return mutate(input, "create");
     });
     return { getTaskOptions, scheduleTask, createStudyCalendarEvent, updateStudyCalendarEvent: (input: Target) => mutate(input, "update"), removeStudyCalendarEvent: (input: Target) => mutate(input, "remove") };

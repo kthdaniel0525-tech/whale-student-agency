@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { INTEGRATION_CAPABILITIES, type IntegrationCapability } from "@/lib/student/integrations/types";
+import { INTEGRATION_CAPABILITIES, REQUESTABLE_INTEGRATION_CAPABILITIES, type IntegrationCapability } from "@/lib/student/integrations/types";
 import { googleCredentials, PROVIDER_TIMEOUT_MS } from "./config";
 import { IntegrationError } from "./errors";
 import type { IntegrationProvider, IntegrationTokens, ProviderReadRequest, ProviderWriteRequest, ProviderDownloadRequest } from "./types";
@@ -60,7 +60,7 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
   constructor(private readonly http: typeof fetch = (...args) => fetch(...args), private readonly credentials = googleCredentials) {}
   isConfigured(): boolean { try { this.credentials(); return true; } catch { return false; } }
   scopesFor(capabilities: readonly IntegrationCapability[]) {
-    if (!capabilities.length || capabilities.some((value) => !INTEGRATION_CAPABILITIES.includes(value))) throw new IntegrationError("INVALID_REQUEST");
+    if (!capabilities.length || capabilities.some((value) => !REQUESTABLE_INTEGRATION_CAPABILITIES.includes(value))) throw new IntegrationError("INVALID_REQUEST");
     return [...new Set(["account-profile" as const, ...capabilities].flatMap((capability) => GOOGLE_SCOPES[capability]))];
   }
   capabilitiesFor(scopes: readonly string[]) {
@@ -121,7 +121,7 @@ export class GoogleIntegrationProvider implements IntegrationProvider {
   private resourceUrl(input: ProviderReadRequest) {
     // Future features supply relative resource paths, never arbitrary URLs or headers.
     if (!input.path || !/^[A-Za-z0-9_~!$&'()*+,;=:@%./-]+$/.test(input.path) || input.path.startsWith("/") || input.path.includes(":") ||
-      input.path.split("/").some((part) => { try { return decodeURIComponent(part).includes("..") || /[\\/\x00-\x20]/.test(decodeURIComponent(part)); } catch { return true; } }))
+      input.path.split("/").some((part) => { try { return decodeURIComponent(part).includes("..") || /[%\\/\x00-\x20]/.test(decodeURIComponent(part)); } catch { return true; } }))
       throw new IntegrationError("INVALID_REQUEST");
     const root = roots[input.capability]; if (!root) throw new IntegrationError("INVALID_REQUEST");
     const url = new URL(input.path, root); if (!url.href.startsWith(root)) throw new IntegrationError("INVALID_REQUEST");

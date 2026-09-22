@@ -42,7 +42,7 @@ function reference(
   },
   deduplicated: boolean,
 ): JobRunReference {
-  return { ...run, deduplicated };
+  return { id: run.id, queueJobId: run.queueJobId, status: run.status, deduplicated };
 }
 
 export async function enqueueRecommendationRefresh(
@@ -85,7 +85,7 @@ export async function enqueueTrackedUserJob<Payload extends {
   rawOptions: RecommendationRefreshEnqueueOptions,
   dependencies: EnqueueDependencies,
 ): Promise<JobRunReference> {
-  if (!userId || userId.length > 100)
+  if (!userId || userId.length > 100 || definition.executionScope !== "user")
     throw new BackgroundJobError("INVALID_PAYLOAD");
   const options = enqueueOptionsSchema.parse(rawOptions);
   const now = options.now ?? new Date();
@@ -94,22 +94,31 @@ export async function enqueueTrackedUserJob<Payload extends {
   );
   const idempotencyKey = options.idempotencyKey ??
     `${definition.name}:v${definition.version}:${userId}:${window}`;
+  const compatible = (run: { userId: string | null; jobName: string; jobVersion: number; resourceId: string | null }) => {
+    if (run.userId !== userId || run.jobName !== definition.name || run.jobVersion !== definition.version || run.resourceId !== (options.resourceId ?? null))
+      throw new BackgroundJobError("AUTHORIZATION_ERROR");
+  };
+  const activeOwner = await db().user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true } });
+  if (!activeOwner) throw new BackgroundJobError("RESOURCE_NOT_FOUND");
+  if (activeOwner.deletionRequestedAt) throw new BackgroundJobError("AUTHORIZATION_ERROR");
   const existing = await db().jobRun.findUnique({ where: { idempotencyKey } });
-  if (existing) return reference(existing, true);
+  if (existing) { compatible(existing); return reference(existing, true); }
 
   const publisher = dependencies.publisher ?? await getBackgroundJobPublisher();
   try {
     const config = getBackgroundJobConfig();
     return await db().$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
       const owner = await transaction.user.findUnique({
         where: { id: userId },
-        select: { id: true },
+        select: { id: true, deletionRequestedAt: true },
       });
       if (!owner) throw new BackgroundJobError("RESOURCE_NOT_FOUND");
+      if (owner.deletionRequestedAt) throw new BackgroundJobError("AUTHORIZATION_ERROR");
       const duplicate = await transaction.jobRun.findUnique({
         where: { idempotencyKey },
       });
-      if (duplicate) return reference(duplicate, true);
+      if (duplicate) { compatible(duplicate); return reference(duplicate, true); }
 
       const queueJobId = randomUUID();
       const run = await transaction.jobRun.create({
@@ -152,6 +161,7 @@ export async function enqueueTrackedUserJob<Payload extends {
         where: {
           userId,
           jobName: definition.name,
+          jobVersion: definition.version,
           status: { in: ["PENDING", "RUNNING"] },
         },
         orderBy: { createdAt: "desc" },
@@ -161,7 +171,12 @@ export async function enqueueTrackedUserJob<Payload extends {
     });
   } catch (cause) {
     const duplicate = await db().jobRun.findUnique({ where: { idempotencyKey } });
-    if (duplicate) return reference(duplicate, true);
+    if (duplicate) {
+      compatible(duplicate);
+      const owner = await db().user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true } });
+      if (!owner || owner.deletionRequestedAt) throw new BackgroundJobError("AUTHORIZATION_ERROR");
+      return reference(duplicate, true);
+    }
     throw normalizeBackgroundJobError(cause);
   }
 }

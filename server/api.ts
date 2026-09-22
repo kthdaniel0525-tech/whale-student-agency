@@ -11,6 +11,7 @@ import { NotFoundError } from "@/server/services/academic";
 import { RecommendationError } from "@/server/recommendations";
 import { AIError } from "@/server/ai/errors";
 import { assertActiveUser } from "@/server/privacy/account-state";
+import { PrivacyError } from "@/server/privacy/deletion";
 const noStore = { "Cache-Control": "private, no-store" };
 export class RequestError extends Error {
   constructor(
@@ -94,6 +95,7 @@ export async function api(
     }
     return Response.json(result ?? { success: true }, { headers: { ...noStore, "X-Request-ID": usageContext.requestId! } });
   } catch (error) {
+    if (error instanceof PrivacyError) return Response.json({ error: new PrivacyError(error.code).message, code: error.code }, { status: error.status, headers: noStore });
     if (error instanceof BillingError) return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: noStore });
     if (error instanceof EntitlementError) return Response.json({ error: error.message, code: error.code, plansUrl: error.plansUrl }, { status: error.status, headers: noStore });
     if (error instanceof z.ZodError)

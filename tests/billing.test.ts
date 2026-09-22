@@ -94,6 +94,13 @@ async function deliver(type = "customer.subscription.updated", object: unknown =
 const post = (path: string, body: unknown, user = owner) => new Request(`http://localhost:3000/api/student/billing/${path}`, { method: "POST", headers: user.headers, body: JSON.stringify(body) });
 
  describe.sequential("billing configuration and checkout", () => {
+  it("pauses new checkout without disabling existing customer portal or signed webhooks", async () => {
+    await attach(); vi.stubEnv("BILLING_CHECKOUT_ENABLED", "false");
+    expect((await checkoutRoute.POST(post("checkout", selection))).status).toBe(503);
+    expect(requests.some(r => r.path === "/v1/checkout/sessions")).toBe(false);
+    expect((await portalRoute.POST(post("portal", {}))).status).toBe(200);
+    expect((await deliver()).status).toBe(200);
+  });
   it("is disabled without secrets and performs no provider calls", async () => { vi.stubEnv("BILLING_ENABLED", "false"); vi.stubEnv("STRIPE_SECRET_KEY", ""); expect(billingConfig()).toEqual({ enabled: false }); expect(await billingPrices()).toEqual([]); expect((await checkoutRoute.POST(post("checkout", selection))).status).toBe(503); expect(boundary.fetch).not.toHaveBeenCalled(); });
   it("validates environment, modes, duplicate prices and server-side currency", () => {
     const env = { ...process.env };

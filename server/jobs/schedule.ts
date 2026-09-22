@@ -97,3 +97,13 @@ export async function registerBillingReconciliationSchedule(boss: ScheduleBounda
   });
   return true;
 }
+
+export async function registerAccountDeletionSchedule(boss: ScheduleBoundary) {
+  if (!getBackgroundJobConfig().scheduleEnabled) return false;
+  const { deleteAccountsJob } = await import("./delete-accounts");
+  await boss.schedule(deleteAccountsJob.name, "*/5 * * * *", { version: 1 }, {
+    key: "account-deletion", tz: "UTC", missed: "once", group: { id: "account-deletion" },
+    retryLimit: 2, retryDelay: 60, expireInSeconds: 300, deadLetter: getBackgroundJobConfig().deadLetterQueue,
+  });
+  return true;
+}

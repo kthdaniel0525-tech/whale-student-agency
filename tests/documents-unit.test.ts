@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chunkPages } from "@/server/documents/chunking";
-import { extractPages, validateFile } from "@/server/documents/extraction";
+import { extractPages, validateFile, validateUploadMime } from "@/server/documents/extraction";
+import { extractPdfPages } from "@/server/documents/extraction/pdf-worker";
 import { validateEmbedding } from "@/server/documents/embeddings";
 import { storage } from "@/server/documents/storage/local";
 import { inductionPages, textPdf } from "./fixtures/documents";
@@ -35,6 +36,21 @@ describe("document parsing and chunking", () => {
       "Invalid document storage",
     );
     expect(validateFile("lecture.md", text)).toBe("MARKDOWN");
+  });
+  it("rejects MIME spoofing and misleading control characters without trusting generic MIME", () => {
+    expect(() => validateUploadMime("lecture.pdf", "text/html")).toThrow();
+    expect(() => validateUploadMime("lecture.txt", "application/pdf")).toThrow();
+    expect(() => validateUploadMime("lecture.md", "text/markdown")).not.toThrow();
+    expect(() => validateUploadMime("lecture.pdf", "application/octet-stream")).not.toThrow();
+    expect(() => validateFile("lecture\u202eexe.txt", new TextEncoder().encode("safe text"))).toThrow();
+  });
+  it("terminates PDF parsing at its deadline and enforces page limits inside the worker", async () => {
+    await expect(extractPdfPages(textPdf(inductionPages), 1)).rejects.toThrow("safe processing limit");
+    await expect(extractPages(textPdf(Array.from({ length: 201 }, () => ["A valid academic page with readable text."])), "PDF")).rejects.toThrow("200 pages");
+    // A terminated parser does not affect subsequent work or the caller's bytes.
+    const bytes = textPdf(inductionPages);
+    await expect(extractPages(bytes, "PDF")).resolves.toHaveLength(2);
+    expect(bytes.length).toBeGreaterThan(0);
   });
   it("preserves all non-whitespace source text around punctuation and long sentences", () => {
     const text =

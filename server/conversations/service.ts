@@ -485,24 +485,24 @@ async function compressOwnedConversation(input: {
     });
     if (remaining !== selected.length) return false;
     await transaction.conversationSummary.upsert({
-    where: { conversationId: input.conversation.id },
-    create: {
-      conversationId: input.conversation.id,
-      userId: input.userId,
-      summaryText: generated.summaryText,
-      data: generated as unknown as Prisma.InputJsonValue,
-      sourceMessageIds,
-      coveredUntilMessageId: last.id,
-      coveredUntilSequence: last.sequence,
-    },
-    update: {
-      summaryText: generated.summaryText,
-      data: generated as unknown as Prisma.InputJsonValue,
-      sourceMessageIds,
-      coveredUntilMessageId: last.id,
-      coveredUntilSequence: last.sequence,
-      version: { increment: 1 },
-    },
+      where: { conversationId: input.conversation.id },
+      create: {
+        conversationId: input.conversation.id,
+        userId: input.userId,
+        summaryText: generated.summaryText,
+        data: generated as unknown as Prisma.InputJsonValue,
+        sourceMessageIds,
+        coveredUntilMessageId: last.id,
+        coveredUntilSequence: last.sequence,
+      },
+      update: {
+        summaryText: generated.summaryText,
+        data: generated as unknown as Prisma.InputJsonValue,
+        sourceMessageIds,
+        coveredUntilMessageId: last.id,
+        coveredUntilSequence: last.sequence,
+        version: { increment: 1 },
+      },
     });
     return true;
   });

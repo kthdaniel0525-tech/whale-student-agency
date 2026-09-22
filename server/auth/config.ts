@@ -9,6 +9,9 @@ function createAuth() {
     appName: "Student Agency",
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
+    // Upstream auth diagnostics may include emails, callback URLs or database
+    // errors. Emit only severity; the request boundary supplies safe failures.
+    logger: { level: "warn", log: (level) => { console.warn("Authentication diagnostic", { level }); } },
     trustedOrigins: [new URL(env.BETTER_AUTH_URL).origin],
     databaseHooks: {
       user: { create: { after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); } } },
@@ -41,6 +44,9 @@ function createAuth() {
       customRules: {
         "/sign-in/email": { window: 60, max: 10 },
         "/sign-up/email": { window: 60, max: 10 },
+        "/change-password": { window: 60, max: 10 },
+        "/reset-password": { window: 60, max: 10 },
+        "/verify-password": { window: 60, max: 10 },
       },
     },
   });

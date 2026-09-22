@@ -22,7 +22,8 @@ export function billingConfig(env: NodeJS.ProcessEnv = process.env) {
     if (environment !== "development" && !origin.startsWith("https://")) throw new Error();
     const portalConfigurationId = z.string().regex(/^bpc_[a-zA-Z0-9_]+$/).optional().parse(env.STRIPE_PORTAL_CONFIGURATION_ID || undefined);
     const graceDays = z.coerce.number().int().min(0).max(14).parse(env.BILLING_GRACE_DAYS ?? "3");
-    return { enabled: true as const, mode, environment, key, webhookSecret, prices, currency, origin, portalConfigurationId, graceDays };
+    const checkoutEnabled = z.enum(["true", "false"]).parse(env.BILLING_CHECKOUT_ENABLED ?? "true") === "true";
+    return { enabled: true as const, mode, environment, key, webhookSecret, prices, currency, origin, portalConfigurationId, graceDays, checkoutEnabled };
   } catch { throw new BillingError("BILLING_CONFIGURATION"); }
 }
 export type EnabledBillingConfig = Extract<ReturnType<typeof billingConfig>, { enabled: true }>;

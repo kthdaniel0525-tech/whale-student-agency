@@ -855,6 +855,13 @@ export async function recordQuestionEvaluation(rawInput: {
       if (previous && previous.userAnswer === input.userAnswer &&
           previous.score === input.score && previous.isCorrect === input.correct &&
           previous.evaluationMethod === (input.method === "deterministic" ? "DETERMINISTIC" : "SEMANTIC")) {
+        for (const topic of topics) {
+          const exists = await transaction.learningProgress.findUnique({
+            where: { userId_courseId_topicId: { userId: input.userId, courseId: topic.courseId, topicId: topic.id } },
+            select: { id: true },
+          });
+          if (!exists) await rebuildTopicProgress(transaction, input.userId, topic.id, attemptedAt);
+        }
         return {
           quizAttemptId: quizAttempt.id,
           questionAttemptId: previous.id,

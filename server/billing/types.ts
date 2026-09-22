@@ -15,5 +15,7 @@ export interface BillingProvider {
   checkout(input: { customerId: string; priceId: string; key: string; expiresAt: Date }): Promise<{ id: string; url: string }>;
   checkoutState(id: string): Promise<{ status: "open" | "complete" | "expired"; url: string | null }>;
   portal(customerId: string, change?: { subscriptionId: string; itemId: string; priceId: string }): Promise<string>;
+  expireCheckout(id: string): Promise<void>;
+  cancelSubscription(id: string): Promise<void>;
   verify(body: string, signature: string): BillingEvent;
 }

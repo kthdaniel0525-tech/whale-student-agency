@@ -51,7 +51,9 @@ use `primary` and the same external event ID.
 
 Add reads title, course, start and duration from the owned StudyTask. It checks selected writable calendar, scope, local tasks and live Google conflicts before sending a minimal event with no attendees or invitations. A durable random event ID and unique link are reserved before HTTP; retries of ambiguous POST failures use the same ID and verify a private link marker. Duplicate clicks cannot insert a second event.
 
-Task edits never automatically patch Google. Update explicitly checks the current link, permissions and conflicts. Remove deletes only that linked event, not the task. Missing/cancelled Google events mark the link missing; sync never recreates them. A later explicit Add reserves a new ID. Disconnect is serialized with authorized network writes and never removes external events.
+Task edits never automatically patch Google. Update explicitly checks the current link, permissions and conflicts. Remove deletes only that linked event, not the task. Missing/cancelled Google events mark the link missing; sync never recreates them. A later explicit Add reserves a new ID. A short transaction reserves a 60-second write lease; bounded provider HTTP runs outside database transactions. Publishing requires the same lease and credential version. Task revisions sent to Google are retained so edits during HTTP remain visibly unsynced.
+
+Disconnect immediately clears credentials and active write leases without waiting for network writes. Further requests and late publication fail. A mutation already accepted by Google cannot be recalled; disconnect never removes external events. The durable event ID permits reconciliation after a lost response or interrupted write.
 
 No external service can make local and Google transactions atomic, nor prevent another calendar client from adding a conflicting event after the final check. Idempotent IDs recover ambiguous creates; updates/removes are repeatable and future sync detects deletions. Users should review shared calendars for subsequent changes. Cache/lease fencing prevents cancelled local work from resurrecting availability.
 

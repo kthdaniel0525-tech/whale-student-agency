@@ -113,6 +113,39 @@ describe.sequential("distributed PostgreSQL guardrails at application boundaries
     expect(await db().aIUsageRecord.count({ where: { userId: owner, workflowRunId: result.runId } })).toBe(1);
     const saved = await engine.get(result.runId, headers); expect(saved.outputs).toEqual(result.outputs);
   });
+  it("does not recreate guard telemetry for deleted or deletion-pending owners, while preserving system events", async () => {
+    const user = await db().user.create({ data: { id: randomUUID(), name: "Deleting guard owner", email: `guard-delete-${randomUUID()}@example.test` } });
+    const before = context(user.id), pending = context(user.id), deleted = context(user.id), system = randomUUID();
+    try {
+      await recordGuardEvent({ context: before, type: "AI_CONTEXT_LIMIT" });
+      expect(await db().aIGuardEvent.count({ where: { requestId: before.requestId } })).toBe(1);
+      await db().user.update({ where: { id: user.id }, data: { deletionRequestedAt: new Date() } });
+      await recordGuardEvent({ context: pending, type: "AI_CONTEXT_LIMIT" });
+      expect(await db().aIGuardEvent.count({ where: { requestId: pending.requestId } })).toBe(0);
+      let beganDeletion!: () => void, finishDeletion!: () => void;
+      const started = new Promise<void>(resolve => { beganDeletion = resolve; });
+      const gate = new Promise<void>(resolve => { finishDeletion = resolve; });
+      const deletion = db().$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id=${user.id} FOR UPDATE`;
+        await tx.aIGuardEvent.deleteMany({ where: { userId: user.id } });
+        await tx.user.delete({ where: { id: user.id } });
+        beganDeletion();
+        await gate;
+      });
+      await started;
+      const lateEvent = recordGuardEvent({ context: deleted, type: "AI_CONTEXT_LIMIT" });
+      finishDeletion();
+      await Promise.all([deletion, lateEvent]);
+      await recordGuardEvent({ context: deleted, type: "AI_CONTEXT_LIMIT" });
+      expect(await db().aIGuardEvent.count({ where: { userId: user.id } })).toBe(0);
+      await recordGuardEvent({ context: { requestId: system }, type: "AI_SERVICE_TEMPORARILY_UNAVAILABLE" });
+      expect(await db().aIGuardEvent.findFirst({ where: { requestId: system } })).toMatchObject({ userId: null });
+    } finally {
+      await db().aIGuardEvent.deleteMany({ where: { OR: [{ userId: user.id }, { requestId: system }] } });
+      await db().user.deleteMany({ where: { id: user.id } });
+    }
+  });
+
   it("records safe guard events and exposes only each owner's aggregates", async () => {
     const c = context(); await recordGuardEvent({ context: c, type: "AI_EMBEDDING_LIMIT", snapshot: { embeddingCalls: 3 } });
     await recordGuardEvent({ context: context(other), type: "AI_CONTEXT_LIMIT" });

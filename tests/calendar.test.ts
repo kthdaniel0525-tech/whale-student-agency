@@ -283,6 +283,47 @@ describe.sequential("Google Calendar integration", () => {
     it("requires write permission before creation", async () => { await select(); await db().connectedAccount.update({ where: { id: accountId }, data: { scopes: [...GOOGLE_SCOPES["calendar-read"]] } }); http.mockClear(); await expect(writes.createStudyCalendarEvent(target())).rejects.toMatchObject({ code: "AUTHORIZATION_REQUIRED" }); expect(http).not.toHaveBeenCalled(); });
     it("creates an owned task event with a durable link and no duplicate on retry", async () => { await select(); const first = await writes.createStudyCalendarEvent(target()); const again = await writes.createStudyCalendarEvent(target()); expect(first.id).toBe(again.id); expect(first.status).toBe("LINKED"); expect(http.mock.calls.filter(([, i]) => i?.method === "POST")).toHaveLength(1); expect(events.get("primary")![0]).toMatchObject({ summary: "Practice induction", start: { dateTime: at("18:00") }, end: { dateTime: at("18:45") } }); expect(await db().externalEventLink.count({ where: { userId: owner.id } })).toBe(1); });
     it("concurrent Add actions cannot create duplicate events", async () => { await select(); const outcomes = await Promise.allSettled([writes.createStudyCalendarEvent(target()), writes.createStudyCalendarEvent(target())]); expect(outcomes.some(o => o.status === "fulfilled")).toBe(true); await writes.createStudyCalendarEvent(target()); expect(http.mock.calls.filter(([, i]) => i?.method === "POST")).toHaveLength(1); });
+    it("does not hold task database locks during external writes and preserves the sent revision", async () => {
+        await select();
+        let entered!: () => void, release!: () => void;
+        const started = new Promise<void>(r => { entered = r; }), gate = new Promise<void>(r => { release = r; });
+        const send = http.getMockImplementation()!;
+        http.mockImplementation(async (resource, init) => { if (init?.method === "POST" && String(resource).includes("/calendar/v3/")) { entered(); await gate; } return send(resource, init); });
+        const write = writes.createStudyCalendarEvent(target());
+        await started;
+        try { await db().studyTask.update({ where: { id: taskId }, data: { title: "Updated while Google responds", updatedAt: new Date(Date.now() + 1000) } }); }
+        finally { release(); }
+        await write;
+        expect((await writes.getTaskOptions(owner.id, taskId)).links[0].needsUpdate).toBe(true);
+    });
+    it("disconnect immediately invalidates an in-flight calendar write lease", async () => {
+        await select();
+        let entered!: () => void, release!: () => void;
+        const started = new Promise<void>(r => { entered = r; }), gate = new Promise<void>(r => { release = r; });
+        const send = http.getMockImplementation()!;
+        http.mockImplementation(async (resource, init) => { if (init?.method === "POST" && String(resource).includes("/calendar/v3/")) { entered(); await gate; } return send(resource, init); });
+        const write = writes.createStudyCalendarEvent(target());
+        const rejected = expect(write).rejects.toMatchObject({ code: "DISCONNECTED" });
+        await started;
+        try { await integration.disconnectConnectedAccount(owner.id, accountId); }
+        finally { release(); }
+        await rejected;
+        expect(await db().externalEventLink.findFirst({ where: { userId: owner.id, studyTaskId: taskId } })).toMatchObject({ status: "PENDING", writeLeaseToken: null, writeLeaseUntil: null });
+    });
+    it("a superseded calendar worker cannot publish or release another lease", async () => {
+        await select();
+        let entered!: () => void, release!: () => void;
+        const started = new Promise<void>(r => { entered = r; }), gate = new Promise<void>(r => { release = r; });
+        const send = http.getMockImplementation()!;
+        http.mockImplementation(async (resource, init) => { if (init?.method === "POST" && String(resource).includes("/calendar/v3/")) { entered(); await gate; } return send(resource, init); });
+        const write = writes.createStudyCalendarEvent(target());
+        const rejected = expect(write).rejects.toMatchObject({ code: "CONNECTION_BUSY" });
+        await started;
+        try { await db().externalEventLink.updateMany({ where: { userId: owner.id, studyTaskId: taskId }, data: { writeLeaseToken: "new-worker", writeLeaseUntil: new Date(Date.now() + 60000) } }); }
+        finally { release(); }
+        await rejected;
+        expect(await db().externalEventLink.findFirst({ where: { userId: owner.id, studyTaskId: taskId } })).toMatchObject({ status: "PENDING", writeLeaseToken: "new-worker" });
+    });
     it("recovers a lost POST response using the reserved event ID", async () => { await select(); losePost = true; await expect(writes.createStudyCalendarEvent(target())).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" }); expect(events.get("primary")).toHaveLength(1); const result = await writes.createStudyCalendarEvent(target()); expect(result.status).toBe("LINKED"); expect(events.get("primary")).toHaveLength(1); });
     it("reschedules locally without external writes and updates only on explicit action", async () => { await select(); await writes.createStudyCalendarEvent(target()); http.mockClear(); await writes.scheduleTask(owner.id, taskId, `${DAY}T19:00`); expect(http.mock.calls.filter(([, i]) => ["POST", "PATCH", "DELETE"].includes(i?.method ?? ""))).toHaveLength(0); expect((await writes.getTaskOptions(owner.id, taskId)).links[0].needsUpdate).toBe(true); await writes.updateStudyCalendarEvent(target()); expect(events.get("primary")![0].start?.dateTime).toBe(at("19:00")); });
     it("rejects busy-time booking deterministically before external mutation", async () => { await select(); events.set("primary", [timed("busy", "18:00", "19:00")]); await expect(writes.createStudyCalendarEvent(target())).rejects.toMatchObject({ code: "CALENDAR_CONFLICT" }); expect(http.mock.calls.some(([, i]) => i?.method === "POST")).toBe(false); });

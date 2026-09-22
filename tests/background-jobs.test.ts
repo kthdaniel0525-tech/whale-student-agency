@@ -21,6 +21,7 @@ import {
   resetBackgroundJobMetricsForTests,
 } from "@/server/jobs";
 import { createBackgroundJobBoss, type BackgroundJobPublisher } from "@/server/jobs/client";
+import { enqueueTrackedUserJob } from "@/server/jobs/enqueue";
 import { executeBackgroundJob } from "@/server/jobs/executor";
 import { createRefreshRecommendationsJob, refreshRecommendationJobPayload, refreshRecommendationsJob } from "@/server/jobs/refresh-recommendations";
 import { startBackgroundJobWorker, stopBackgroundJobWorker } from "@/server/jobs/worker";
@@ -338,6 +339,91 @@ describe.sequential("Background Job Infrastructure", () => {
     const result = await executeBackgroundJob(refreshRecommendationsJob, queued(tampered));
     expect(result).toMatchObject({ status: "deadletter", output: { errorCode: "AUTHORIZATION_ERROR" } });
     expect(await db().recommendation.count({ where: { userId: foreign.id } })).toBe(0);
+    expect(await db().jobRun.findUnique({ where: { id: run.id } })).toMatchObject({ status: "PENDING", attempt: 0 });
+  });
+
+  it("claims a duplicate delivery only once and never replays completed work", async () => {
+    const fake = publisher(), ref = await enqueueRecommendationRefresh(owner.id, { idempotencyKey: randomUUID() }, { publisher: fake.boundary });
+    let enter!: () => void, release!: () => void;
+    const hit = new Promise<void>(r => { enter = r; }), gate = new Promise<void>(r => { release = r; });
+    const handler = vi.fn(async () => { enter(); await gate; return { done: true }; });
+    const definition = { ...refreshRecommendationsJob, handler };
+    const first = executeBackgroundJob(definition, queued(fake.calls[0]));
+    await hit;
+    expect(await executeBackgroundJob(definition, queued(fake.calls[0]))).toMatchObject({ output: { skipped: true } });
+    expect(await db().jobRun.findUnique({ where: { id: ref.id } })).toMatchObject({ status: "RUNNING", attempt: 1 });
+    release(); await first;
+    await executeBackgroundJob(definition, queued(fake.calls[0]));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("recovers an expired delivery and fences stale completion/failure (failure=%s)", async failure => {
+    const fake = publisher(), ref = await enqueueRecommendationRefresh(owner.id, { idempotencyKey: randomUUID() }, { publisher: fake.boundary });
+    let enter!: () => void, release!: () => void;
+    const hit = new Promise<void>(r => { enter = r; }), gate = new Promise<void>(r => { release = r; });
+    const stale = executeBackgroundJob({ ...refreshRecommendationsJob, handler: async () => { enter(); await gate; if (failure) throw new AIError("PROVIDER_FAILURE"); return { marker: "stale" }; } }, queued(fake.calls[0]));
+    await hit;
+    await db().jobRun.update({ where: { id: ref.id }, data: { startedAt: new Date(Date.now() - 31000) } });
+    const retry = await executeBackgroundJob({ ...refreshRecommendationsJob, handler: async () => ({ marker: "current" }) }, queued(fake.calls[0], 1));
+    expect(retry).toMatchObject({ status: "completed", output: { marker: "current" } });
+    release(); await stale;
+    expect(await db().jobRun.findUnique({ where: { id: ref.id } })).toMatchObject({ status: "COMPLETED", attempt: 2, metadata: { marker: "current" } });
+  });
+
+  it("preserves cancellation against in-flight completion and later replay", async () => {
+    const fake = publisher(), ref = await enqueueRecommendationRefresh(owner.id, { idempotencyKey: randomUUID() }, { publisher: fake.boundary });
+    let enter!: () => void, release!: () => void;
+    const hit = new Promise<void>(r => { enter = r; }), gate = new Promise<void>(r => { release = r; });
+    const handler = vi.fn(async () => { enter(); await gate; return { done: true }; });
+    const definition = { ...refreshRecommendationsJob, handler };
+    const running = executeBackgroundJob(definition, queued(fake.calls[0]));
+    await hit;
+    await db().jobRun.update({ where: { id: ref.id }, data: { status: "CANCELLED" } });
+    release(); await running; await executeBackgroundJob(definition, queued(fake.calls[0], 1));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(await db().jobRun.findUnique({ where: { id: ref.id } })).toMatchObject({ status: "CANCELLED" });
+  });
+
+  it("scopes idempotency to owner, job, version and resource and returns only safe references", async () => {
+    const fake = publisher(), key = randomUUID();
+    const ref = await enqueueRecommendationRefresh(owner.id, { idempotencyKey: key }, { publisher: fake.boundary });
+    expect(Object.keys(ref).sort()).toEqual(["deduplicated", "id", "queueJobId", "status"]);
+    await expect(enqueueRecommendationRefresh(foreign.id, { idempotencyKey: key }, { publisher: fake.boundary })).rejects.toMatchObject({ code: "AUTHORIZATION_ERROR" });
+    for (const definition of [{ ...refreshRecommendationsJob, name: "different" }, { ...refreshRecommendationsJob, version: 2 }])
+      await expect(enqueueTrackedUserJob(definition, owner.id, { idempotencyKey: key }, { publisher: fake.boundary })).rejects.toMatchObject({ code: "AUTHORIZATION_ERROR" });
+    await expect(enqueueRecommendationRefresh(owner.id, { idempotencyKey: key, resourceId: "other" }, { publisher: fake.boundary })).rejects.toMatchObject({ code: "AUTHORIZATION_ERROR" });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("cross-user concurrent idempotency collisions cannot reveal the winning reference", async () => {
+    const fake = publisher(), key = randomUUID();
+    const outcomes = await Promise.allSettled([owner, foreign].map(user => enqueueRecommendationRefresh(user.id, { idempotencyKey: key }, { publisher: fake.boundary })));
+    expect(outcomes.filter(x => x.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.find(x => x.status === "rejected")).toMatchObject({ reason: { code: "AUTHORIZATION_ERROR" } });
+  });
+
+  it("does not enqueue or return a duplicate job for an account being deleted", async () => {
+    const fake = publisher(), key = randomUUID();
+    await enqueueRecommendationRefresh(owner.id, { idempotencyKey: key }, { publisher: fake.boundary });
+    await db().user.update({ where: { id: owner.id }, data: { deletionRequestedAt: new Date() } });
+    try {
+      await expect(enqueueRecommendationRefresh(owner.id, { idempotencyKey: key }, { publisher: fake.boundary })).rejects.toMatchObject({ code: "AUTHORIZATION_ERROR" });
+      await expect(enqueueRecommendationRefresh(owner.id, { idempotencyKey: randomUUID() }, { publisher: fake.boundary })).rejects.toMatchObject({ code: "AUTHORIZATION_ERROR" });
+    } finally { await db().user.update({ where: { id: owner.id }, data: { deletionRequestedAt: null } }); }
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("creates one system tracking row under simultaneous schedule delivery", async () => {
+    let enter!: () => void, release!: () => void;
+    const hit = new Promise<void>(r => { enter = r; }), gate = new Promise<void>(r => { release = r; });
+    const handler = vi.fn(async () => { enter(); await gate; return { done: true }; });
+    const definition = { ...refreshRecommendationsJob, name: "test-system-security", executionScope: "system" as const, payloadSchema: refreshRecommendationJobPayload.pick({ version: true }), handler };
+    const job = { id: randomUUID(), name: definition.name, data: { version: 1 }, retryCount: 0, retryLimit: 3, signal: new AbortController().signal };
+    const deliveries = [executeBackgroundJob(definition, job), executeBackgroundJob(definition, job)];
+    await hit; release(); await Promise.all(deliveries);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(await db().jobRun.count({ where: { queueJobId: job.id } })).toBe(1);
+    await db().jobRun.deleteMany({ where: { queueJobId: job.id } });
   });
 
   it("enqueues supported domain events with exact event deduplication", async () => {

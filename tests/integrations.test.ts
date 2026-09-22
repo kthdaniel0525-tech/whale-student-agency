@@ -91,6 +91,32 @@ const req = (method: string, data?: unknown, user = owner) => new Request("http:
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; };
 
 describe.sequential("Integration OAuth foundation", () => {
+  it("rejects the unused email capability at the public connection and provider boundaries", async () => {
+    const response = await h.routes.connect(req("POST", { provider: "google", capabilities: ["email-read"] }));
+    expect(response.status).toBe(400);
+    expect(await response.text()).not.toContain("gmail");
+    expect(() => h.provider.scopesFor(["email-read"])).toThrowError(new IntegrationError("INVALID_REQUEST"));
+    expect(() => h.provider.scopesFor(["calendar-read", "email-read"])).toThrowError(new IntegrationError("INVALID_REQUEST"));
+    expect(await db().oAuthConnectionSession.count({ where: { userId: owner.id } })).toBe(0);
+    expect(h.http).not.toHaveBeenCalled();
+    const scopes = h.provider.scopesFor(["calendar-read", "calendar-write", "drive-read"]);
+    expect(scopes.some(scope => /gmail|mail\.google/i.test(scope))).toBe(false);
+  });
+
+  it("recognizes historical email grants without requesting Gmail during reconnect", async () => {
+    const { account } = await h.connect();
+    await db().connectedAccount.update({ where: { id: account.id }, data: { scopes: [...GOOGLE_SCOPES["account-profile"], ...GOOGLE_SCOPES["email-read"]] } });
+    expect(h.provider.capabilitiesFor(GOOGLE_SCOPES["email-read"])).toContain("email-read");
+    const result = await h.service.startIntegrationConnection({ provider: "google", connectedAccountId: account.id, capabilities: ["calendar-read"] }, owner.headers);
+    const scopes = new URL(result.authorizationUrl).searchParams.get("scope")!.split(" ");
+    expect(scopes).toEqual(expect.arrayContaining([...GOOGLE_SCOPES["calendar-read"]]));
+    expect(scopes.some(scope => /gmail|mail\.google/i.test(scope))).toBe(false);
+    const pending = await db().oAuthConnectionSession.findFirstOrThrow({ where: { userId: owner.id, targetAccountId: account.id, usedAt: null } });
+    expect(pending.requestedScopes).toEqual(scopes);
+    await h.service.disconnectConnectedAccount(owner.id, account.id);
+    expect((await h.service.getConnectedAccount(owner.id, account.id)).status).toBe("disconnected");
+  });
+
   async function calendarConnection() {
     h.state.scopes.push(...GOOGLE_SCOPES["calendar-read"], ...GOOGLE_SCOPES["drive-read"]);
     const { account } = await h.connect({ capabilities: ["calendar-read", "drive-read"] });
@@ -381,6 +407,28 @@ describe.sequential("Integration OAuth foundation", () => {
     const rejected = expect(read).rejects.toMatchObject({ code: "DISCONNECTED" }); await entered.promise;
     await h.service.disconnectConnectedAccount(owner.id, account.id); release.resolve(); await rejected;
   });
+  it("disconnect commits while a provider write is in flight and fences its response", async () => {
+    h.state.scopes.push(...GOOGLE_SCOPES["calendar-write"]);
+    const { account } = await h.connect({ capabilities: ["calendar-write"] });
+    const entered = deferred(), release = deferred();
+    h.state.readHook = async () => { entered.resolve(); await release.promise; };
+    const write = h.service.withProviderClient({ userId: owner.id, connectedAccountId: account.id, provider: "google", capability: "calendar-write" },
+      client => client.write({ path: "calendars/primary/events", method: "POST", body: { id: "abc123" } }));
+    const rejected = expect(write).rejects.toMatchObject({ code: "DISCONNECTED" });
+    await entered.promise;
+    try { expect(await h.service.disconnectConnectedAccount(owner.id, account.id)).toMatchObject({ status: "disconnected" }); }
+    finally { release.resolve(); }
+    await rejected;
+    expect(await db().connectedAccount.findUnique({ where: { id: account.id } })).toMatchObject({ accessTokenEncrypted: null, refreshTokenEncrypted: null });
+  });
+  it("stops credential access during account deletion but still allows revocation", async () => {
+    const { account } = await h.connect();
+    await db().user.update({ where: { id: owner.id }, data: { deletionRequestedAt: new Date() } });
+    try {
+      await expect(h.service.getValidAccessToken(owner.id, account.id)).rejects.toBeInstanceOf(IntegrationError);
+      expect(await h.service.disconnectConnectedAccount(owner.id, account.id)).toMatchObject({ status: "disconnected" });
+    } finally { await db().user.update({ where: { id: owner.id }, data: { deletionRequestedAt: null } }); }
+  });
   it.each(["https://evil.test", "//evil.test", "/student/settings?next=https://evil.test", "/student/../outside", "javascript:alert(1)"])("blocks unapproved post-OAuth redirects: %s", async (redirectPath) => {
     await expect(h.service.startIntegrationConnection({ provider: "google", redirectPath: redirectPath as "/student/settings" }, owner.headers)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(await db().oAuthConnectionSession.count({ where: { userId: owner.id } })).toBe(0);
@@ -467,6 +515,11 @@ describe("Token encryption and provider HTTP boundary", () => {
     const service = createIntegrationService({ registry: h.registry });
     expect((await service.getIntegrationSettings(owner.id)).providers[0].available).toBe(false);
   });
+  it("refuses HTTP OAuth callbacks even on loopback in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("INTEGRATION_OAUTH_BASE_URL", "http://localhost:3000");
+    expect(() => integrationOrigin()).toThrow();
+  });
   it("uses HTTPS fixed endpoints, body credentials, bounded requests and no redirects", async () => {
     await h.connect(); const [url, options] = h.http.mock.calls[0];
     expect(String(url)).toBe("https://oauth2.googleapis.com/token"); expect(options).toMatchObject({ method: "POST", redirect: "error", cache: "no-store", signal: expect.any(AbortSignal) });
@@ -480,7 +533,7 @@ describe("Token encryption and provider HTTP boundary", () => {
     expect(failure).toMatchObject({ code: "PROVIDER_UNAVAILABLE" }); expect(failure).not.toHaveProperty("cause");
     expect(String(failure)).not.toContain(secrets.refresh);
   });
-  it.each(["https://evil.test", "//evil.test", "../userinfo", "%2e%2e/userinfo", "calendars%2F..%2Fuserinfo"])("rejects unsafe provider-client paths %s", async (path) => {
+  it.each(["https://evil.test", "//evil.test", "../userinfo", "%2e%2e/userinfo", "calendars%2F..%2Fuserinfo", "%252e%252e/userinfo", "calendars/%255cuserinfo"])("rejects unsafe provider-client paths %s", async (path) => {
     await expect(h.provider.read({ capability: "calendar-read", path, accessToken: secrets.access })).rejects.toMatchObject({ code: "INVALID_REQUEST" }); expect(h.http).not.toHaveBeenCalled();
   });
 });

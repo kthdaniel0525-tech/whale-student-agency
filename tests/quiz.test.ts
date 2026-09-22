@@ -717,6 +717,22 @@ describe.sequential("owned quiz retrieval and answer grading", () => {
     expect(boundary.structured.mock.calls[0][0].routing).toMatchObject({ qualityCritical: kind === "hard", signals: { grading: kind === "hard" ? "short" : kind } });
   });
 
+  it.each(["foreign", "different quiz"] as const)("rejects a %s attempt before semantic grading", async (scope) => {
+    const boundary = setup(quizData(1, "short-answer"));
+    const quiz = await boundary.service.generateQuiz({ request: "Quiz me on induction", count: 1, questionType: "short-answer" }, owner.headers);
+    const userId = scope === "foreign" ? other.id : owner.id;
+    const unrelated = await db().quiz.create({ data: { userId, title: "Unrelated private quiz", difficulty: "MEDIUM" } });
+    const attempt = await db().quizAttempt.create({ data: { userId, quizId: unrelated.id } });
+    boundary.structured.mockClear();
+    boundary.getProvider.mockClear();
+    await expect(boundary.service.evaluateAnswer({
+      quizId: quiz.id, questionId: quiz.questions[0].id, quizAttemptId: attempt.id, userAnswer: "Attempt",
+    }, owner.headers)).rejects.toEqual(new QuizAgentError("QUIZ_NOT_FOUND"));
+    expect(boundary.structured).not.toHaveBeenCalled();
+    expect(boundary.getProvider).not.toHaveBeenCalled();
+    expect(await db().questionAttempt.count({ where: { quizAttemptId: attempt.id } })).toBe(0);
+  });
+
   it("prevents cross-user quiz retrieval and grading without revealing existence", async () => {
     const boundary = setup(quizData(1));
     const quiz = await boundary.service.generateQuiz(

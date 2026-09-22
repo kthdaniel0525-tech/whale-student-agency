@@ -1,0 +1,112 @@
+# Security and privacy audit
+
+Audit date: 2026-09-22. Scope: the PostgreSQL student platform, its authenticated HTTP boundaries, AI/context/learning/workflow services, document storage and parsing, Google integrations, billing, background jobs, and deletion lifecycle. This records repository review and local regression evidence; it is not a production penetration test, a certification, or a legal compliance determination.
+
+**Status: repository security audit and remediation complete; full automated regression, production Webpack build and compiled PDF smoke passed.** No confirmed unresolved CRITICAL or HIGH code finding was identified in the reviewed scope. Production resource isolation, secret provisioning, retention policy, and restore procedures remain operator responsibilities. Live provider configuration, infrastructure isolation and restore drills still require deployment verification.
+
+The [data map](security-privacy-data-map.md) is the detailed inventory of personal data, processors, derived records, deletion cascades, and retention exceptions. Findings below distinguish changes made by this audit from existing controls and remaining limitations.
+
+## Findings
+
+### CRITICAL
+
+The initial dependency audit reported one CRITICAL advisory in Next.js; the framework was patched to 16.3.5 and the final dependency audit reports none. No application-specific critical exploit was confirmed in this review; this is not proof that none exists.
+
+### HIGH — fixed
+
+- **Raw exceptions could cross the API boundary.** Generic `error.code` handling returned upstream error messages before database-specific handling, potentially exposing schema/query/input details. `server/api.ts` now maps known categories to fixed public messages, reconstructs AI errors from approved codes, and emits type-only diagnostics for unknown failures. Secret-bearing error regressions cover responses and logs in `tests/security-http.test.ts`.
+- **Untrusted PDF parsing could monopolize the application process.** Parsing now runs in a dedicated worker with a 20-second deadline, 128 MB old-generation and 16 MB young-generation V8 heap limits, bounded 200-page/400,000-character extraction, disabled eval/XFA/font fetching, empty inherited environment, and discarded raw parser output. See `server/documents/extraction/pdf-worker.ts` and `tests/documents-unit.test.ts`. Worker threads are not a security sandbox; native/ArrayBuffer allocations still require OS/container memory and CPU limits. The compiled production parser passed real extraction, malformed-file, page-limit and deployment-trace checks.
+
+
+### MEDIUM — fixed or hardened
+
+- **Duplicate or stale background deliveries could repeat work or overwrite newer outcomes.** `server/jobs/executor.ts` now atomically claims eligible work and requires exact attempt/start-time ownership for completion/failure. Terminal/cancelled jobs cannot run again; forged identities cannot alter the legitimate tracking row. `tests/background-jobs.test.ts` covers duplicate delivery, expired claims, stale completion, cancellation, and concurrent system jobs.
+
+- **Legacy AI request abuse and unbounded JSON buffering.** Legacy analyze/connection routes now require session authentication, canonical-origin CSRF checks, strict bounded schemas, streamed byte limits, and one stable per-user rate bucket across sessions and both routes. Public inputs cannot select another user or inject product model/entitlement overrides.
+- **Session and redirect boundaries.** Password reset/change revoke sessions; password change cannot opt out. Mutation bodies are bounded, password verification is throttled by user, and callback/redirect fields—including duplicate query values—must stay on the configured origin. Cookie protections, sanitized auth logging, production HTTPS, and startup validation are explicit. Pending-deletion users are rejected at auth, API/page, entitlement, and worker boundaries.
+- **Deleted conversation text could return through a late summary.** Summary publication now locks the owned conversation briefly and rechecks the prior summary version and every newly summarized message. Message/conversation deletion during generation cancels stale persistence. Three deterministic race tests cover both old and new summarized content and whole-conversation deletion.
+- **Final-answer retries could inflate learning evidence.** Quiz submissions reuse the latest owned attempt, including completed attempts; identical replays leave evidence timestamps and aggregates unchanged. Intentional retakes use `startNewAttempt: true`. Concurrent retries and next-day replay are covered in `tests/learning.test.ts`.
+- **Provider HTTP held database transactions open.** Calendar writes and billing operations use short transactions to acquire leases and compare ownership/version before publishing results; remote HTTP runs outside transactions. Late workers cannot commit or release a replacement lease. Calendar regression tests and `tests/security-privacy.test.ts` cover row-lock availability and stale commits.
+- **Job idempotency could cross owner/job/resource boundaries.** Enqueue now validates owner, job name, version, and explicit-key resource binding on ordinary, collision, and debounce paths. Admission serializes with account deletion; returned references are minimal.
+- **OAuth accepted production loopback HTTP.** OAuth origin validation now requires HTTPS in production, including loopback; development retains local HTTP support.
+
+### LOW — fixed
+
+- Added CSP, anti-framing, nosniff, no-referrer, Permissions-Policy, production HSTS, and removal of the framework identification header. CSP's remaining inline-script limitation is listed below.
+- Uploads now reject declared MIME/type mismatches and misleading filename control characters; storage rejects empty/oversized writes. Extension, PDF magic, strict UTF-8, private paths, and owner checks remain enforced.
+- Fixed provider-root paths reject nested encoding that could become traversal after a second decode.
+- Quiz attempt ownership is checked before semantic grading, avoiding paid provider work on foreign or unrelated attempts.
+- Study task changes/replanning serialize on the owned plan, preventing stale aggregate completion status.
+- Guard-event inserts lock and check the active owner, so late telemetry cannot recreate a deleted user's identifier.
+- Public OAuth admission and scope generation reject unused Gmail permission requests. Historical grants remain identifiable; reconnect requests only supported capabilities. Historical provider consent may require explicit remote revocation.
+
+### INFO — lifecycle and dependency hardening
+
+- Added password-reauthenticated account deletion. It first marks the user pending, revokes sessions/OAuth handshakes, and cancels tracked active jobs/workflows. Provider checkout expiry and subscription cancellation precede local deletion; failures preserve a disabled, retryable account and its financial mapping. Integration credentials are removed locally even when best-effort remote revocation fails. Product records, summaries, vectors, credentials, and owned operational records cascade; guard events and known password-reset verification rows receive explicit cleanup. Disk deletion uses the surviving `FileDeletion` retry queue.
+- `PRIVACY_BILLING_RETENTION_DAYS` is an explicit operator decision for accounts with billing records: 0–3650 days. Zero retains no local billing mapping; positive values retain only provider customer/subscription IDs and deletion/expiry timestamps. This does not erase Stripe's records or prescribe a legally required retention period.
+- Billing has a checkout-only pause and a full-provider disable setting. Existing signed-webhook, ownership, server-side price/plan verification, deduplication, and provider reconciliation controls remain in place. Provider return URLs alone do not grant entitlements.
+- Dependency updates and scoped transitive overrides bring the recorded `npm audit` result to zero reported vulnerabilities. This result covers the installed dependency graph and advisory data at execution time, not all possible defects.
+
+## Boundaries verified and remaining risk
+
+Student mutation routes use the shared authenticated API boundary; public exceptions are bounded auth endpoints and signature-authenticated billing webhooks. Current routes derive identity from Better Auth, not request headers. Service ownership predicates/composite relations, strict schemas, parameterized SQL, and no-store responses are covered by existing and new regressions. No live `use server` action or credentialed wildcard CORS configuration was found.
+
+AI receives bounded task-relevant profile/academic fields, selected retrieval passages, conversation context, and relevant memory. Credentials and billing records are excluded. Retrieved text stays untrusted reference material; model output cannot authorize tools, arbitrary SQL, provider writes, or workflow registration. Sources come from server retrieval records. Public input cannot supply trusted context, models, routing, guardrails, or workflow steps. Prompt injection can still affect answer quality; these controls limit authority and data access rather than guarantee semantic immunity.
+
+OAuth uses session/user/provider-bound random state, PKCE, expiry, and atomic consumption. Tokens use authenticated encryption with identity/purpose binding. Refresh/version fences prevent revoked credentials from being restored. Provider URLs, redirects, response sizes, and deadlines are constrained. Google Calendar context exposes availability windows rather than event descriptions; Calendar writes require explicit product actions. Drive import is explicitly selected and uses the same private document pipeline. No production institution/LMS adapter is registered.
+
+OpenAI is the implemented remote generation provider. Requests use `store: false`, which does not establish all provider retention settings. Persisted retrieval/conversation/memory embeddings use local inference; optional model-asset downloads are distinct from sending user text to hosted inference. External provider retention and deployment vendors/regions must be confirmed outside this repository.
+
+Remaining items:
+
+- **MEDIUM, deployment:** enforce parser/process OS memory and CPU limits, ingress request-size/time/concurrency limits, and private storage permissions/volumes. App limits alone cannot contain slow connections or every parser native allocation.
+- **MEDIUM, defense in depth:** CSP still permits inline scripts/styles for current framework/theme bootstrapping. It does not prevent an injected inline script. No reachable user/model HTML execution sink was found; rendering is React-escaped text. Nonce/hash CSP requires separately verified rendering changes.
+- **MEDIUM, operational privacy:** establish and test backup, external-log, webhook-receipt, dead-letter, and other non-cascading record retention. Account deletion does not erase provider originals, existing Google Calendar events, prior provider requests, Stripe financial history, or backups. Source-file deletion also leaves independent saved notes/quizzes/conversation artifacts; whole-account deletion covers those local product records.
+- **LOW, operational:** ingress/proxy logs must redact auth/reset/OAuth callback and billing-return query strings. Application log filtering does not govern external log collectors. Alert on pending account deletion and `FileDeletion` failures; maintenance timestamps alone do not perform cleanup while workers are stopped.
+- **INFO, validation:** provider network boundaries were mocked. Production OAuth configuration/revocation, Stripe operational setup, egress policy, encrypted backups, and restore procedures were not exercised against live services.
+
+## Exact emergency controls
+
+Merge emergency settings with existing JSON overrides instead of discarding unrelated limits. Apply environment changes to every application and worker instance using the deployment's normal restart/redeploy mechanism, then verify denial at the affected boundary. These switches govern subsequent admissions; they cannot recall an HTTP request already sent to a provider.
+
+- **All guarded AI:** `AI_GUARDRAILS_JSON={"disableAllAI":true}`. Background only: `{"disableBackgroundAI":true}`. Targeted disable: `{"disabledFeatures":["career-preparation","memory-index"]}`; values match trusted guard feature, workflow ID, or usage source. See `server/ai/guardrails/{config,service}.ts`. These controls cover the guarded platform AI path; separately block legacy `/api/analyze` and `/api/connection` at ingress for a complete AI incident stop.
+- **OpenAI reliability routing:** `AI_RELIABILITY_JSON={"disabledProviders":["openai"]}`. This removes that provider from the reliability path; it is not a revocation of the provider key or a universal egress block. `AI_EVAL_SAMPLING_ENABLED=false` disables new optional content-evaluation sampling.
+- **Integration vetoes:** `ENTITLEMENT_FEATURE_FLAGS_JSON={"integration.calendar":false,"integration.drive":false,"integration.lms":false}`. Keep affected accounts disconnected/revoked when credentials themselves are suspect; a flag does not erase an existing provider grant.
+- **Document ingestion veto:** add `"academic.documents":false` to `ENTITLEMENT_FEATURE_FLAGS_JSON`, plus disable affected import capabilities and stop the document-processing/background worker services for a parser incident. There is no dedicated parser-wide environment stop. Already queued processing and running work require process/queue containment, not just new-admission vetoes.
+- **New checkout pause:** `BILLING_CHECKOUT_ENABLED=false`, retaining `BILLING_ENABLED=true`, preserves portal access, cancellation, webhooks, and reconciliation. It does not prevent portal-mediated plan changes or cancel existing subscriptions. **Full billing shutdown:** `BILLING_ENABLED=false`; this also blocks provider-backed cancellation/reconciliation/deletion cleanup and does not itself stop existing Stripe charges.
+- **Scheduled work:** `BACKGROUND_JOB_SCHEDULE_ENABLED=false` only skips schedule registration. It does not unregister persisted pg-boss schedules, drain queued jobs, or stop registered workers. Stop the relevant worker deployment and explicitly manage persisted schedules/queues when containment requires it. Restore deletion/file-cleanup maintenance promptly or perform equivalent controlled cleanup.
+
+## Incident runbook
+
+For every incident, record the UTC interval, affected deployment/version, request/job/provider IDs, scope, containment actions, and recovery owner. Preserve restricted evidence without copying passwords, tokens, authorization codes, full prompts, document bodies, or card data into ordinary tickets/logs. Determine actual exposure from evidence; do not equate an error spike with confirmed disclosure.
+
+1. **OAuth/token exposure:** veto the affected integration capabilities, stop related sync workers, and disconnect affected accounts through the canonical service. Revoke grants in the provider account/console if the best-effort call fails; local disconnect clears tokens before remote revocation, so a retry after token erasure cannot prove remote revocation. Rotate compromised client/encryption credentials through the secret manager. Retain old encryption key IDs only as needed for controlled re-encryption/recovery, then retire them after verification; changing the active key alone does not re-encrypt old ciphertext. Validate denial of stale callbacks/refreshes and require fresh consent before restoring access. Preserve local imported content according to the incident/deletion decision.
+2. **AI abuse, unexpected disclosure, or runaway spend:** disable guarded AI and evaluation sampling; block legacy AI endpoints and provider egress if a complete stop is required. Stop affected background workers, revoke an exposed provider key, and inspect safe usage/guard records for affected request IDs, volume, model, and time window. Check provider-side usage independently. Reproduce with synthetic content, verify context/ownership and limits, then restore one bounded path and monitor. Do not claim previous provider requests have been erased merely because the application stopped sending new ones.
+3. **Billing/webhook issue:** pause new checkout first. Keep signed webhooks and cancellation available where safe. If the secret or signing key is compromised, rotate it in Stripe and the deployment and verify signatures before resuming processing. Reconcile provider customer/subscription state with local records, deduplicating by provider event/session IDs; do not repair access based only on a success redirect. Resolve ambiguous customer/checkout operations before deleting mappings. Confirm subscription cancellation in Stripe for pending account deletions; a disabled app account or `BILLING_ENABLED=false` is not confirmation that charging stopped.
+4. **Parser/storage incident:** block new uploads/imports, stop parsing workers, and isolate suspect files without opening them in the web process. Record opaque file IDs and minimal safe diagnostics; restrict quarantine access. Check resource-limit enforcement and the deployed PDF module/worker artifact, reproduce using a safe fixture, and validate page/text/deadline/heap limits. Patch the parser or processing boundary, test normal extraction and rejection, and resume at bounded concurrency. Reconcile failed/orphaned files and `FileDeletion`; never delete cleanup queue rows to hide a backlog.
+
+Recovery requires evidence that the triggering path is contained, the fix passes a relevant regression, any affected provider state is reconciled, and pending deletion/retention work has resumed. External notifications or disclosure decisions belong to the designated operator under the applicable incident process; this audit makes no jurisdiction-specific determination.
+
+## Backup and restore requirements
+
+- Define the owner, retention period, access policy, recovery-point objective, and recovery-time objective before production use. Encrypt backups and transport; keep restore credentials and encryption-key recovery under access controls separate from ordinary application access.
+- Back up matching PostgreSQL schema/data, pgvector content, private original-document bytes, and the integration encryption key versions needed to decrypt retained ciphertext. Model cache can be recreated from pinned assets. Do not put private storage, environment files, or keys into public/build artifacts.
+- Keep a minimal, access-controlled deletion/revocation ledger sufficient to replay decisions newer than a backup. On restore, keep ingress/provider egress and workers disabled, apply migrations, replay deletion/retention decisions, invalidate obsolete sessions/grants, and reconcile Stripe before enabling customer activity. A restored queue or account must not reactivate erased content, a revoked integration, or a cancelled subscription.
+- Exercise a restore in an isolated environment with provider network access disabled. Verify representative ownership, document accessibility, vector references, cascade cleanup, pending billing deletions, key recovery, and expiry sweeps. Record measured recovery time and cleanup results. No backup/restore drill was performed by this audit.
+
+## Verification record
+
+Evidence below was collected during parallel audit work. Counts from separate focused runs overlap and must not be summed as unique tests.
+
+- Dependency scan: `npm audit` recorded **0 vulnerabilities**.
+- TypeScript: recorded pass. ESLint: **0 errors, 4 warnings**.
+- Production build: Next **16.3.5 Webpack**, `npm run build -- --webpack`, passed after the PDF runtime-resolution fix. Default Turbopack rebuild hit an execution-environment port-binding restriction (`EPERM`); its earlier build passed before the resolver fix. Compiled production PDF smoke passed via `node --import tsx scripts/verify-pdf-build.mjs`, including real two-page extraction, damaged-file rejection, 201-page rejection, preserved bytes, deployment dependency tracing, and absence of build-machine source paths. The runtime resolver uses the deployed application directory; focused PDF tests were rerun after this final portability correction (7/7). Real browser upload/extraction/search/download/deletion passed.
+- Fresh migration verification: **35 migrations / 66 tables**, recorded pass.
+- Secret review: **779 working-tree files and 1,100 historical blobs across 11 commits** scanned; only template/placeholder URLs identified, with no confirmed real keys. This is a bounded scan, not proof of absence from external logs, ignored files, or other repositories.
+- Auth/HTTP/rendering/startup focused run: **38 passed**. AI/learning/context/workflow focused run: **372 passed**. Calendar rerun: **61 passed**. Background jobs/integrations/notification/scheduling focused run: **167 passed**. No real AI/Google/LMS provider calls were made by these tests.
+- Final full run: **67 files / 1,651 tests passed; 0 failed, 0 skipped**, in 110.40 seconds. Earlier interrupted/time-out runs are superseded by this unchanged-code run. The new privacy/deletion/lease suite passed all 9 cases.
+- Browser verification: **18/18 cases passed** in rate-respecting batches (10 + 8). Tests used temporary mock OAuth configuration and a worker restricted to synthetic document-test accounts. Initial environment failures and subsequent legitimate 10-signups/minute throttling were resolved without weakening production limits.
+- Built-server startup and actual headers: HTTPS-configured startup passed; CSP, nosniff, HSTS and no-store verified; anonymous API returned 401 and the protected page streamed its sign-in redirect. Temporary loopback port was closed after verification.
+- Fresh-server document suite, physical deletion and local RAG: passed. Final compiled PDF extraction: **passed**. Temporary credentials/workers were test-only and have been removed; the normal development server is restored.
+
+Primary regression anchors: `tests/security-{http,privacy,rendering,startup}.test.ts`, `tests/{documents-unit,documents,integrations,calendar,background-jobs,conversations,learning,quiz,study-planner,billing}.test.ts`, and existing agent/workflow/entitlement suites. Primary implementation anchors are named in each finding and in the [data map](security-privacy-data-map.md).

@@ -1,3 +1,4 @@
+import { deleteAccountsJob } from "./delete-accounts";
 import { reconcileBillingJob } from "./reconcile-billing";
 import "server-only";
 import { evaluateAIResponseJob } from "./evaluate-ai-response";
@@ -11,6 +12,7 @@ import { deliverUserNotificationsJob, deliverReadyNotificationsJob } from "./del
 import { scheduledRecommendationRefreshJob } from "./scheduled-recommendations";
 
 export const BACKGROUND_JOBS = [
+  deleteAccountsJob,
   reconcileBillingJob,
   evaluateAIResponseJob,
   syncExternalCourseJob, scheduleExternalCourseSyncJob,

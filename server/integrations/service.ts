@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ConnectedAccount, Prisma } from "@/generated/prisma/client";
-import { startConnectionSchema, INTEGRATION_CAPABILITIES, type StartConnectionInput, type ConnectedAccountView, type IntegrationCapability, type IntegrationProviderId, type IntegrationSettingsView } from "@/lib/student/integrations/types";
+import { startConnectionSchema, INTEGRATION_CAPABILITIES, REQUESTABLE_INTEGRATION_CAPABILITIES, type StartConnectionInput, type ConnectedAccountView, type IntegrationCapability, type IntegrationProviderId, type IntegrationSettingsView } from "@/lib/student/integrations/types";
 import { auth } from "../auth/config";
 import { db } from "../db/client";
 import { callbackUri, OAUTH_SESSION_TTL_MS } from "./config";
@@ -31,9 +31,9 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     if (!session) throw new IntegrationError("UNAUTHENTICATED");
     return { userId: session.user.id, sessionHash: hash(session.session.id) };
   }
-  async function owned(userId: string, id: string, tx: Prisma.TransactionClient = db()) {
+  async function owned(userId: string, id: string, tx: Prisma.TransactionClient = db(), allowDeleting = false) {
     if (!idSchema.safeParse(userId).success || !idSchema.safeParse(id).success) throw new IntegrationError("INVALID_REQUEST");
-    const account = await tx.connectedAccount.findFirst({ where: { id, userId } });
+    const account = await tx.connectedAccount.findFirst({ where: { id, userId, ...(!allowDeleting ? { user: { deletionRequestedAt: null } } : {}) } });
     if (!account) throw new IntegrationError("NOT_FOUND"); return account;
   }
   function view(account: ConnectedAccount & { syncStates?: Parameters<typeof integrationHealth>[1] }, capability?: IntegrationCapability): ConnectedAccountView {
@@ -74,7 +74,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       if (await tx.connectedAccount.count({ where: { userId: identity.userId, provider: provider.id, revocationPendingUntil: { gt: timestamp } } })) throw new IntegrationError("CONNECTION_BUSY");
       const target = input.connectedAccountId ? await owned(identity.userId, input.connectedAccountId, tx) : null;
       if (target && target.provider !== provider.id) throw new IntegrationError("INVALID_REQUEST");
-      const capabilities = [...new Set([...input.capabilities, ...(target ? provider.capabilitiesFor(target.scopes) : [])])];
+      const capabilities = [...new Set([...input.capabilities, ...(target ? provider.capabilitiesFor(target.scopes).filter(capability => REQUESTABLE_INTEGRATION_CAPABILITIES.includes(capability)) : [])])];
       for (const capability of capabilities) await assertIntegrationAccess(identity.userId, capability, tx);
       await assertResourceCreation(identity.userId, "account", tx, target?.id);
       const scopes = provider.scopesFor(capabilities);
@@ -211,12 +211,13 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
     const result = await db().$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${id} AND "userId"=${userId} FOR UPDATE`;
-      const account = await owned(userId, id, tx);
+      const account = await owned(userId, id, tx, true);
       if (account.status === "REVOKED") return { account, changed: false };
       await tx.oAuthConnectionSession.deleteMany({ where: { userId } });
       await tx.connectedAccount.update({ where: { id }, data: { status: "REVOKED", accessTokenEncrypted: null, refreshTokenEncrypted: null,
         accessTokenExpiresAt: null, revokedAt: now(), lastErrorCode: null, refreshRetryAfter: null, refreshLeaseToken: null, refreshLeaseUntil: null, credentialVersion: { increment: 1 },
         revocationPendingUntil: new Date(now().getTime() + 15000) } });
+      await tx.externalEventLink.updateMany({ where: { connectedAccountId: id, userId }, data: { writeLeaseToken: null, writeLeaseUntil: null } });
       await tx.integrationSyncState.updateMany({ where: { connectedAccountId: id }, data: { status: "IDLE", cursorEncrypted: null, leaseToken: null, leaseUntil: null } });
       await tx.externalFileLink.updateMany({ where: { connectedAccountId: id, userId, syncStatus: { in: ["PENDING", "IMPORTING"] } }, data: { syncStatus: "FAILED", errorCode: "DISCONNECTED", leaseToken: null, leaseUntil: null, requestVersion: { increment: 1 } } });
       // Retain the user's selection for reconnect; the revoked account gate stops
@@ -237,7 +238,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       await db().connectedAccount.updateMany({ where: { id, userId, status: "REVOKED", credentialVersion: result.account.credentialVersion + 1 }, data: { revocationErrorCode, revocationPendingUntil: null } });
       emitIntegrationEvent("INTEGRATION_DISCONNECTED", { provider: registry.get(result.account.provider).id, connectedAccountId: id, ...(revocationErrorCode ? { errorCode: revocationErrorCode } : {}) });
     }
-    return getConnectedAccount(userId, id);
+    return view(await owned(userId, id, db(), true));
   });
 
   const assertProviderAccess = async (userId: string, id: string, capability: IntegrationCapability, provider: IntegrationProviderId, tx: Prisma.TransactionClient = db()) => {

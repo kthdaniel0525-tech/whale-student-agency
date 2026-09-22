@@ -93,6 +93,8 @@ export class StripeBillingProvider implements BillingProvider {
       return hostedUrl(s.url, "billing.stripe.com");
     });
   }
+  async expireCheckout(id: string) { await this.call(() => this.sdk.checkout.sessions.expire(id)); }
+  async cancelSubscription(id: string) { await this.call(() => this.sdk.subscriptions.cancel(id, { invoice_now: false, prorate: false })); }
   verify(body: string, signature: string): BillingEvent {
     let event: Stripe.Event;
     try { event = this.sdk.webhooks.constructEvent(body, signature, this.config.webhookSecret); } catch { throw new BillingError("BILLING_SIGNATURE", 400); }

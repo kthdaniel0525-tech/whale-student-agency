@@ -516,11 +516,10 @@ export class StudyPlannerAgentService {
     try {
       const saved = await db().$transaction(async (transaction) => {
         await lockAndCheckLocalSchedule(transaction, userId, tasks, existing.id);
-        const stillOwned = await transaction.studyPlan.findFirst({
-          where: { id: existing.id, userId },
-          select: { id: true },
-        });
-        if (!stillOwned) throw new StudyPlannerAgentError("PLAN_NOT_FOUND");
+        const stillOwned = await transaction.$queryRaw<{ id: string }[]>`
+          SELECT id FROM "StudyPlan" WHERE id=${existing.id} AND "userId"=${userId} FOR UPDATE
+        `;
+        if (!stillOwned.length) throw new StudyPlannerAgentError("PLAN_NOT_FOUND");
         await transaction.studyTask.updateMany({
           where: {
             studyPlanId: existing.id,
@@ -541,9 +540,10 @@ export class StudyPlannerAgentService {
           where: { studyPlanId: existing.id, userId, status: { not: "SKIPPED" } },
           _sum: { durationMinutes: true },
         });
-        const completedDates = existing.tasks
-          .filter((task) => task.status === "COMPLETED" || retained.some((item) => item.id === task.id))
-          .map((task) => dateOnly(task.date));
+        const completedDates = (await transaction.studyTask.findMany({
+          where: { studyPlanId: existing.id, userId, OR: [{ status: "COMPLETED" }, { id: { in: retained.map((item) => item.id) } }] },
+          select: { date: true },
+        })).map((task) => dateOnly(task.date));
         const startDate = [validatedBrief.startDate, ...completedDates].sort()[0];
         const endDate = [validatedBrief.endDate, ...completedDates].sort().at(-1)!;
         await transaction.studyPlan.update({
@@ -699,6 +699,11 @@ export class StudyPlannerAgentService {
           select: { studyPlanId: true, durationMinutes: true, courseId: true, topicId: true },
         });
         if (!task) throw new StudyPlannerAgentError("TASK_NOT_FOUND");
+        // Serialize sibling task updates and replanning so plan totals/status
+        // reflect committed task states, not concurrent partial snapshots.
+        await transaction.$queryRaw`
+          SELECT id FROM "StudyPlan" WHERE id=${task.studyPlanId} AND "userId"=${userId} FOR UPDATE
+        `;
         await transaction.studyTask.update({
           where: { id: taskId },
           data: { status: taskStatusToDatabase[parsed.data] },

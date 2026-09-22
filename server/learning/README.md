@@ -11,13 +11,15 @@ distinct. Unscoped quizzes retain labels but do not create course topics.
 When no course is supplied, an exact topic set already belonging to one and
 only one course can resolve that scope safely; ambiguous topics stay unscoped.
 
-When an answer is graded, `recordQuestionEvaluation` stores it in the current
-incomplete `QuizAttempt`, updates every mapped topic equally, and completes the
+When an answer is graded, `recordQuestionEvaluation` stores it in the latest
+owned `QuizAttempt`, updates every mapped topic equally, and completes the
 attempt after every quiz question has an answer. Regrading the same question in
 the same attempt replaces its evidence instead of increasing counts. Removing
 an attempt through `deleteQuizAttempt` rebuilds only its affected topics.
-Clients can pass `startNewAttempt: true` on the first graded answer of an
-intentional retake so an abandoned incomplete attempt is not reused.
+Clients must pass `startNewAttempt: true` on the first graded answer of an
+intentional retake. Otherwise completed attempts are also reused, preventing
+replayed final submissions from creating false practice sessions. An identical
+answer and grading result does not refresh evidence timestamps or aggregates.
 
 Mastery uses a 50% Bayesian prior with four virtual medium questions. The last
 eight answers receive up to 60% of the estimate, decay with a 30-day half-life,

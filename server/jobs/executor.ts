@@ -1,3 +1,4 @@
+import { assertActiveUser } from "../privacy/account-state";
 import { canRunBackgroundFeature } from "../entitlements/resources";
 import "server-only";
 import { withAIUsageContext } from "../ai/usage/context";
@@ -23,16 +24,23 @@ async function ensureJobRun<Payload extends object>(
   job: QueueJob,
   definition: BackgroundJob<Payload>,
 ) {
-  return db().jobRun.upsert({
-    where: { queueJobId: job.id },
-    create: {
-      queueJobId: job.id,
-      idempotencyKey: `external:${job.id}`,
-      jobName: definition.name,
-      jobVersion: definition.version,
-    },
-    update: {},
-  });
+  const existing = await db().jobRun.findUnique({ where: { queueJobId: job.id } });
+  if (existing) return existing;
+  // User jobs require a server-created, owner-bound tracking row. Only registered
+  // system schedules can materialize an untracked delivery.
+  if (definition.executionScope !== "system") throw new BackgroundJobError("AUTHORIZATION_ERROR");
+  try {
+    return await db().jobRun.create({ data: { queueJobId: job.id, idempotencyKey: `external:${job.id}`,
+      jobName: definition.name, jobVersion: definition.version } });
+  } catch (error) {
+    // Simultaneous schedule delivery can race on the unique queue ID. Re-read
+    // that ID only; an unrelated idempotency-key collision never grants access.
+    if (error instanceof Error && "code" in error && error.code === "P2002") {
+      const concurrent = await db().jobRun.findUnique({ where: { queueJobId: job.id } });
+      if (concurrent) return concurrent;
+    }
+    throw error;
+  }
 }
 
 function safeIdentity(value: unknown) {
@@ -59,37 +67,19 @@ export async function executeBackgroundJob<Payload extends object>(
   const logger = options.logger ?? console;
   const started = Date.now();
   const attempt = job.retryCount + 1;
-  const run = await ensureJobRun(job, definition);
+  let run: Awaited<ReturnType<typeof ensureJobRun>>;
+  try { run = await ensureJobRun(job, definition); }
+  catch (cause) { const error = normalizeBackgroundJobError(cause); return { id: job.id, status: "deadletter", output: { errorCode: error.code, retryable: error.retryable, attempt } }; }
   const identity = safeIdentity(job.data);
   const priorMetadata = safeMetadata(run.metadata);
-
-  await db().jobRun.updateMany({
-    where: { id: run.id, queueJobId: job.id },
-    data: {
-      status: "RUNNING",
-      attempt,
-      startedAt: new Date(started),
-      completedAt: null,
-      failedAt: null,
-      errorCode: null,
-      metadata: { ...priorMetadata, queue: job.name },
-    },
-  });
-  recordBackgroundJobMetric("started");
-  logBackgroundJob({
-    event: "started",
-    jobName: definition.name,
-    jobRunId: run.id,
-    userId: run.userId,
-    resourceId: run.resourceId,
-    attempt,
-    status: "running",
-  }, logger);
+  let ownsClaim = false;
+  const claimTime = new Date(started);
+  const claimIdentity = { id: run.id, queueJobId: job.id, status: "RUNNING" as const, attempt, startedAt: claimTime };
 
   try {
-    const payload = definition.payloadSchema.parse(job.data);
-    const invalidRun = run.jobName !== definition.name ||
-      run.jobVersion !== definition.version;
+    const invalidRun = job.name !== definition.name || run.jobName !== definition.name ||
+      run.jobVersion !== definition.version || !Number.isSafeInteger(job.retryCount) || job.retryCount < 0 || job.retryCount > job.retryLimit ||
+      !Number.isSafeInteger(job.retryLimit) || job.retryLimit < 0 || job.retryLimit > definition.retryPolicy.limit;
     const invalidUserIdentity = definition.executionScope === "user" && (
       identity?.trackingId !== run.id || identity.userId !== run.userId
     );
@@ -100,6 +90,42 @@ export async function executeBackgroundJob<Payload extends object>(
     if (invalidRun || invalidUserIdentity || invalidSystemIdentity) {
       throw new BackgroundJobError("AUTHORIZATION_ERROR");
     }
+    if (["COMPLETED", "CANCELLED", "FAILED"].includes(run.status)) return { id: job.id, status: "completed", output: { skipped: true } };
+    if (run.userId) await assertActiveUser(run.userId);
+    const claimed = await db().jobRun.updateMany({
+      where: { id: run.id, queueJobId: job.id,
+        ...(run.userId ? { user: { deletionRequestedAt: null } } : {}),
+        OR: [
+          { status: "PENDING", attempt: { lt: attempt } },
+          // Recover a crashed/expired delivery only after its execution budget.
+          { status: "RUNNING", attempt: { lte: attempt }, startedAt: { lte: new Date(started - definition.timeoutSeconds * 1000) } },
+        ],
+      },
+      data: {
+        status: "RUNNING",
+        attempt,
+        startedAt: new Date(started),
+        completedAt: null,
+        failedAt: null,
+        errorCode: null,
+        metadata: { ...priorMetadata, queue: job.name },
+      },
+    });
+    if (!claimed.count) return { id: job.id, status: "completed", output: { skipped: true } };
+    ownsClaim = true;
+    const payload = definition.payloadSchema.parse(job.data);
+    job.signal.throwIfAborted();
+    recordBackgroundJobMetric("started");
+    logBackgroundJob({
+      event: "started",
+      jobName: definition.name,
+      jobRunId: run.id,
+      userId: run.userId,
+      resourceId: run.resourceId,
+      attempt,
+      status: "running",
+    }, logger);
+
     const allowed = !run.userId || await canRunBackgroundFeature(run.userId, definition.name);
     const result = !allowed ? { skipped: true, reason: "ENTITLEMENT_REQUIRED" } : await withAIUsageContext({ ...(run.userId ? { userId: run.userId } : {}), requestId: `job:${run.id}`, backgroundJobId: run.id, guardFeature: definition.name, guardProfile: "BACKGROUND" }, () => definition.handler({
       payload,
@@ -108,8 +134,8 @@ export async function executeBackgroundJob<Payload extends object>(
       jobRunId: run.id,
     }));
     const durationMs = Date.now() - started;
-    await db().jobRun.updateMany({
-      where: { id: run.id, queueJobId: job.id },
+    const published = await db().jobRun.updateMany({
+      where: claimIdentity,
       data: {
         status: "COMPLETED",
         completedAt: new Date(),
@@ -118,6 +144,7 @@ export async function executeBackgroundJob<Payload extends object>(
         metadata: { ...priorMetadata, queue: job.name, durationMs, ...result },
       },
     });
+    if (!published.count) return { id: job.id, status: "completed", output: { skipped: true } };
     recordBackgroundJobMetric("completed", durationMs);
     logBackgroundJob({
       event: "completed",
@@ -134,8 +161,10 @@ export async function executeBackgroundJob<Payload extends object>(
     const error = normalizeBackgroundJobError(cause, job.signal);
     const exhausted = !error.retryable || job.retryCount >= job.retryLimit;
     const durationMs = Date.now() - started;
-    await db().jobRun.updateMany({
-      where: { id: run.id, queueJobId: job.id },
+    // Invalid identity/payload replays and stale workers must not rewrite another
+    // worker's tracking row or revive a cancelled/deleted account's job.
+    const published = ownsClaim ? await db().jobRun.updateMany({
+      where: claimIdentity,
       data: {
         status: exhausted ? "FAILED" : "PENDING",
         failedAt: exhausted ? new Date() : null,
@@ -148,7 +177,8 @@ export async function executeBackgroundJob<Payload extends object>(
           exhausted,
         },
       },
-    });
+    }) : null;
+    if (ownsClaim && !published?.count) return { id: job.id, status: "completed", output: { skipped: true } };
     recordBackgroundJobMetric("failed", durationMs);
     if (!exhausted) recordBackgroundJobMetric("retry");
     logBackgroundJob({

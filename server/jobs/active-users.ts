@@ -38,6 +38,7 @@ export async function selectActiveRecommendationUsers(
 
   const rows = await db().user.findMany({
     where: {
+      deletionRequestedAt: null,
       ...(input.cursor ? { id: { gt: input.cursor } } : {}),
       OR: [
         { sessions: { some: { OR: [
