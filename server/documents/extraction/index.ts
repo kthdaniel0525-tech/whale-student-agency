@@ -2,10 +2,19 @@ import "server-only";
 import {
   DocumentError,
   MAX_FILE_BYTES,
-  MAX_PAGES,
   MAX_TEXT_CHARS,
 } from "../config";
+import { extractPdfPages } from "./pdf-worker";
 export type ExtractedPage = { pageNumber: number; content: string };
+export function validateUploadMime(name: string, mime: string) {
+  const type = mime.trim().toLowerCase().split(";")[0];
+  if (!type || type === "application/octet-stream") return;
+  const extension = name.split(".").pop()?.toLowerCase();
+  const allowed = extension === "pdf" ? ["application/pdf"] :
+    extension === "txt" ? ["text/plain"] : ["text/plain", "text/markdown", "text/x-markdown"];
+  if (!allowed.includes(type))
+    throw new DocumentError("The file type does not match its supported format.", 415);
+}
 function clean(value: string) {
   return value
     .replace(/\r\n?/g, "\n")
@@ -17,7 +26,7 @@ function clean(value: string) {
 export function validateFile(name: string, bytes: Uint8Array) {
   if (!bytes.length || bytes.length > MAX_FILE_BYTES)
     throw new DocumentError("Choose a non-empty file up to 10 MB.", 413);
-  if (name.length > 200 || /[\/\\\x00-\x1f]/.test(name))
+  if (name.length > 200 || /[\/\\\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(name))
     throw new DocumentError("Choose a file with a simple filename.");
   const extension = name.split(".").pop()?.toLowerCase();
   const signature = new TextDecoder().decode(bytes.slice(0, 5));
@@ -54,49 +63,5 @@ export async function extractPages(
       );
     return [{ pageNumber: 1, content }];
   }
-  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const task = getDocument({
-    data: bytes,
-    enableXfa: false,
-    useWorkerFetch: false,
-    useSystemFonts: true,
-    stopAtErrors: true,
-  });
-  try {
-    const pdf = await task.promise;
-    if (pdf.numPages > MAX_PAGES)
-      throw new DocumentError("PDFs can contain up to 200 pages.");
-    const pages: ExtractedPage[] = [];
-    let size = 0;
-    for (let index = 1; index <= pdf.numPages; index++) {
-      const page = await pdf.getPage(index);
-      const text = await page.getTextContent();
-      const content = clean(
-        text.items
-          .map((item) =>
-            "str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "",
-          )
-          .join(""),
-      );
-      size += content.length;
-      if (size > MAX_TEXT_CHARS)
-        throw new DocumentError(
-          "Extracted text exceeds the 400,000-character limit.",
-        );
-      pages.push({ pageNumber: index, content });
-      page.cleanup();
-    }
-    if (pages.every((page) => page.content.length < 10))
-      throw new DocumentError(
-        "No readable text found. Scanned PDFs need OCR before upload.",
-      );
-    return pages;
-  } catch (e) {
-    if (e instanceof DocumentError) throw e;
-    throw new DocumentError(
-      "This PDF could not be read. It may be encrypted or damaged.",
-    );
-  } finally {
-    await task.destroy();
-  }
+  return extractPdfPages(bytes);
 }

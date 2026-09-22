@@ -1,3 +1,4 @@
+import { BillingError } from "./billing/errors";
 import { EntitlementError } from "./entitlements/errors";
 import "server-only";
 import { captureUsageContext, withAIUsageContext } from "./ai/usage/context";
@@ -8,6 +9,8 @@ import { db } from "@/server/db/client";
 import { getEnv } from "@/server/env";
 import { NotFoundError } from "@/server/services/academic";
 import { RecommendationError } from "@/server/recommendations";
+import { AIError } from "@/server/ai/errors";
+import { assertActiveUser } from "@/server/privacy/account-state";
 const noStore = { "Cache-Control": "private, no-store" };
 export class RequestError extends Error {
   constructor(
@@ -31,8 +34,9 @@ export function checkOrigin(request: Request) {
 export async function readJson<Output, Input>(
   request: Request,
   schema: z.ZodType<Output, z.ZodTypeDef, Input>,
+  maxBytes = 32768,
 ): Promise<Output> {
-  if (!request.headers.get("content-type")?.includes("application/json"))
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
     throw new RequestError("JSON is required.", 415);
   const reader = request.body?.getReader();
   if (!reader) throw new RequestError("Request body is required.", 400);
@@ -42,7 +46,7 @@ export async function readJson<Output, Input>(
     const { value, done } = await reader.read();
     if (done) break;
     bytes += value.length;
-    if (bytes > 32768) {
+    if (bytes > maxBytes) {
       await reader.cancel();
       throw new RequestError("Request is too large.", 413);
     }
@@ -71,6 +75,7 @@ export async function api(
     checkOrigin(request);
     const session = await auth().api.getSession({ headers: request.headers });
     if (!session) throw new RequestError("Please sign in to continue.", 401);
+    await assertActiveUser(session.user.id);
     if (
       needsProfile &&
       !(await db().profile.findUnique({
@@ -89,6 +94,7 @@ export async function api(
     }
     return Response.json(result ?? { success: true }, { headers: { ...noStore, "X-Request-ID": usageContext.requestId! } });
   } catch (error) {
+    if (error instanceof BillingError) return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: noStore });
     if (error instanceof EntitlementError) return Response.json({ error: error.message, code: error.code, plansUrl: error.plansUrl }, { status: error.status, headers: noStore });
     if (error instanceof z.ZodError)
       return Response.json(
@@ -121,7 +127,20 @@ export async function api(
     }
     const code =
       error instanceof Error && "code" in error ? error.code : undefined;
-    if (typeof code === "string") {
+    // A provider/ORM/driver's `code` does not make its message public. In
+    // particular Prisma messages can contain queries, schema names and inputs.
+    if (code === "P2003" || code === "P2025")
+      return Response.json(
+        { error: "This item is no longer available. Refresh and try again." },
+        { status: 404, headers: noStore },
+      );
+    const publicCodes = [
+      "UNAUTHENTICATED", "AUTHENTICATION_FAILURE", "NOT_FOUND", "RUN_NOT_FOUND", "QUIZ_NOT_FOUND", "PLAN_NOT_FOUND", "TASK_NOT_FOUND", "CONVERSATION_NOT_FOUND", "REFERENCE_NOT_FOUND",
+      "ENTITLEMENT_REQUIRED", "PLAN_USAGE_EXHAUSTED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED", "RATE_LIMIT", "AI_REQUEST_RATE_LIMITED", "AI_CONCURRENCY_LIMIT", "AI_EMBEDDING_LIMIT", "AI_DUPLICATE_REQUEST",
+      "AI_GUARD_STORAGE_UNAVAILABLE", "AI_FEATURE_DISABLED", "AI_SERVICE_TEMPORARILY_UNAVAILABLE", "AI_STREAM_INTERRUPTED", "TIMEOUT", "PROVIDER_FAILURE", "STORAGE_FAILURE", "CONFIGURATION", "AUTHENTICATION", "INVALID_RESPONSE",
+      "INVALID_REQUEST", "CONTEXT_MISMATCH", "INVALID_TARGET", "LIMIT_EXCEEDED", "CONFLICT",
+    ];
+    if (typeof code === "string" && (error instanceof AIError || publicCodes.includes(code))) {
       const status =
         ["UNAUTHENTICATED", "AUTHENTICATION_FAILURE"].includes(code) ? 401
           : ["ENTITLEMENT_REQUIRED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED"].includes(code) ? 403
@@ -132,15 +151,15 @@ export async function api(
               : ["PROVIDER_FAILURE", "STORAGE_FAILURE", "CONFIGURATION", "AUTHENTICATION", "INVALID_RESPONSE"].includes(code) ? 503
                 : 400;
       return Response.json(
-        { error: error instanceof Error ? error.message : "The request could not be completed.", ...(["ENTITLEMENT_REQUIRED", "PLAN_USAGE_EXHAUSTED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED"].includes(code) ? { code, plansUrl: "/plans" } : {}) },
+        { error: error instanceof AIError ? new AIError(error.code).message
+          : status === 401 ? "Please sign in to continue."
+            : status === 404 ? "This item was not found."
+              : status === 429 ? "Too many requests. Please try again later."
+                : status === 503 ? "This service is temporarily unavailable. Please try again."
+                  : "The request could not be completed. Check its inputs and try again.", ...(["ENTITLEMENT_REQUIRED", "PLAN_USAGE_EXHAUSTED", "PLAN_MODEL_QUALITY_CONFLICT", "ENTITLEMENT_FEATURE_DISABLED"].includes(code) ? { code, plansUrl: "/plans" } : {}) },
         { status, headers: noStore },
       );
     }
-    if (code === "P2003" || code === "P2025")
-      return Response.json(
-        { error: "This item is no longer available. Refresh and try again." },
-        { status: 404, headers: noStore },
-      );
     console.error("Student API request failed", {
       type: error instanceof Error ? error.name : "UnknownError",
     });

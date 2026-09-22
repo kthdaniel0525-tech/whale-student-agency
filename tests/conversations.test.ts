@@ -397,6 +397,58 @@ describe.sequential("Conversation persistence and compression", () => {
     expect((await getConversation(conversation.id, owner.headers)).summary).toBeUndefined();
   });
 
+  it.each(["new message", "previous summary", "whole conversation"] as const)(
+    "does not restore deleted content when %s is removed during summary generation",
+    async (deletion) => {
+      const conversation = await createConversation({}, owner.headers);
+      const deletedText = `My goal is confidential deletion evidence ${randomUUID()}.`;
+      const messages = await appendMany(conversation.id, [
+        deletedText,
+        ...Array.from({ length: 25 }, (_, index) => `Practice checkpoint ${index}.`),
+      ]);
+      const boundary = summaryBoundary();
+      if (deletion === "previous summary") {
+        await compressConversation(conversation.id, owner.headers, {
+          getProvider: () => boundary.provider,
+          embeddingProvider: null,
+        });
+        expect((await getConversation(conversation.id, owner.headers)).summary?.summaryText)
+          .toContain(deletedText);
+        await appendMany(conversation.id, Array.from({ length: 14 }, (_, index) => `New checkpoint ${index}.`));
+      }
+      let deletedDuringGeneration = false;
+      const provider: AIProvider = {
+        ...boundary.provider,
+        async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
+          const result = await boundary.provider.generateStructuredOutput(request);
+          // Deterministically model a deletion that commits while the external
+          // summary request is in flight, before its result is persisted.
+          if (deletion === "whole conversation")
+            await deleteConversation(conversation.id, owner.headers);
+          else await deleteConversationMessage(conversation.id, messages[0].id, owner.headers);
+          deletedDuringGeneration = true;
+          return result;
+        },
+      };
+      expect(await compressConversation(conversation.id, owner.headers, {
+        getProvider: () => provider,
+        embeddingProvider: null,
+      })).toBeUndefined();
+      expect(deletedDuringGeneration).toBe(true);
+      expect(await db().conversationSummary.count({ where: { conversationId: conversation.id } })).toBe(0);
+      expect(await db().conversationMessage.count({ where: { id: messages[0].id } })).toBe(0);
+      if (deletion !== "whole conversation") {
+        const retrieved = await retrieveRelevantConversationMessages({
+          conversationId: conversation.id,
+          query: "confidential deletion evidence",
+        }, owner.headers, { embeddingProvider: null });
+        expect(JSON.stringify(retrieved)).not.toContain(deletedText);
+        const refreshed = await compressConversation(conversation.id, owner.headers, { embeddingProvider: null });
+        expect(JSON.stringify(refreshed)).not.toContain(deletedText);
+      }
+    },
+  );
+
   it("retrieves exact and paraphrased old messages with bounded same-conversation results", async () => {
     const embeddingProvider = semanticEmbedding();
     const conversation = await createConversation({}, owner.headers);

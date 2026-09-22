@@ -85,3 +85,15 @@ export async function registerAcademicSyncSchedule(boss: ScheduleBoundary, overr
   await boss.schedule(scheduleExternalCourseSyncJob.name, academicSyncConfig().cron, { version: 1 }, { key: "academic-sync-sweep", tz: "UTC", missed: "once", group: { id: "academic-sync-sweep" }, retryLimit: 2, retryDelay: 60, expireInSeconds: 120, deadLetter: config.deadLetterQueue });
   return true;
 }
+
+export async function registerBillingReconciliationSchedule(boss: ScheduleBoundary) {
+  const config = getBackgroundJobConfig();
+  const { billingConfig } = await import("../billing/config");
+  if (!config.scheduleEnabled || !billingConfig().enabled) return false;
+  const { reconcileBillingJob } = await import("./reconcile-billing");
+  await boss.schedule(reconcileBillingJob.name, "*/10 * * * *", { version: 1 }, {
+    key: "billing-reconciliation", tz: "UTC", missed: "once", group: { id: "billing-reconciliation" },
+    retryLimit: 2, retryDelay: 60, retryBackoff: true, expireInSeconds: 300, deadLetter: config.deadLetterQueue,
+  });
+  return true;
+}

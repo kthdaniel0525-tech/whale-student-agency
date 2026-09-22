@@ -8,7 +8,7 @@ export function integrationOrigin(): string {
     const trusted = new URL(getEnv().BETTER_AUTH_URL);
     const value = new URL(process.env.INTEGRATION_OAUTH_BASE_URL ?? trusted.origin);
     if (value.origin !== trusted.origin || value.pathname !== "/" || value.search || value.hash || value.username || value.password ||
-      (value.protocol !== "https:" && !(value.protocol === "http:" && ["localhost", "127.0.0.1"].includes(value.hostname)))) throw new Error();
+      (value.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && value.protocol === "http:" && ["localhost", "127.0.0.1"].includes(value.hostname)))) throw new Error();
     return value.origin;
   } catch { throw new IntegrationError("CONFIGURATION"); }
 }

@@ -646,6 +646,25 @@ describe.sequential("Learning Intelligence persistence and retrieval", () => {
     });
   });
 
+  it("deduplicates simultaneous final-answer submissions without inflating evidence or recency", async () => {
+    const course = await createCourse(owner.id, "REPLAY");
+    const { quiz, question } = await createQuestion({ userId: owner.id, courseId: course.id, topicNames: ["Replay evidence"] });
+    const submission = { userId: owner.id, quizId: quiz.id, questionId: question.id, score: 1, correct: true, attemptedAt: NOW };
+    const results = await Promise.all([record(submission), record(submission), record(submission)]);
+    expect(new Set(results.map((result) => result.quizAttemptId)).size).toBe(1);
+    expect(new Set(results.map((result) => result.questionAttemptId)).size).toBe(1);
+    const before = await db().learningProgress.findFirstOrThrow({ where: { userId: owner.id, courseId: course.id } });
+    expect(before).toMatchObject({ questionsAttempted: 1, practiceSessions: 1 });
+    await record({ ...submission, attemptedAt: new Date(NOW.getTime() + DAY) });
+    expect(await db().learningProgress.findFirstOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await db().questionAttempt.findUniqueOrThrow({ where: { id: results[0].questionAttemptId } }))
+      .toMatchObject({ attemptedAt: NOW });
+    const retake = await record({ ...submission, startNewAttempt: true, attemptedAt: new Date(NOW.getTime() + DAY) });
+    expect(retake.quizAttemptId).not.toBe(results[0].quizAttemptId);
+    expect(await db().learningProgress.findFirstOrThrow({ where: { id: before.id } }))
+      .toMatchObject({ questionsAttempted: 2, practiceSessions: 2 });
+  });
+
   it("supports an intentional new session instead of reusing an abandoned attempt", async () => {
     const course = await createCourse(owner.id, "RETAKE");
     const quiz = await db().quiz.create({

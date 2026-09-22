@@ -90,6 +90,10 @@ try {
       "ReminderPreference",
       "Notification",
       "JobRun",
+      "BillingCustomer",
+      "BillingSubscription",
+      "BillingCheckout",
+      "BillingWebhookEvent",
     ]) {
       if (!tables.rows.some((row) => row.tablename === table))
         throw new Error(`Missing ${table} table.`);
@@ -97,7 +101,7 @@ try {
     const migration = await verify.query(
       'SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
     );
-    if (migration.rows[0].count !== 33)
+    if (migration.rows[0].count !== 34)
       throw new Error("Unexpected applied migration count.");
     const integrationColumns = await verify.query(`SELECT column_name FROM information_schema.columns
       WHERE table_schema='public' AND ((table_name='ConnectedAccount' AND column_name IN ('refreshLeaseToken','refreshLeaseUntil','deniedCapabilities'))

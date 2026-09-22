@@ -1,6 +1,7 @@
 import "server-only";
 import { DocumentError, MAX_FILE_BYTES } from "./config";
 import { uploadDocument } from "./service";
+import { validateUploadMime } from "./extraction";
 export async function acceptUpload(request: Request, userId: string) {
   const type = request.headers.get("content-type") || "";
   if (!type.startsWith("multipart/form-data;"))
@@ -39,6 +40,7 @@ export async function acceptUpload(request: Request, userId: string) {
       throw new DocumentError("Invalid upload fields.");
   const file = form.get("file");
   if (!(file instanceof File)) throw new DocumentError("Choose a file.");
+  validateUploadMime(file.name, file.type);
   const metadata = {
     title: form.get("title") || file.name,
     ...(form.get("courseId") ? { courseId: form.get("courseId") } : {}),

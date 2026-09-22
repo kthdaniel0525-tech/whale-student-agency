@@ -28,5 +28,5 @@ export function FeatureAccess({ capability, title, children }: { capability: Cap
 }
 export function PlanAccessSummary() {
   const { access } = useEntitlements();
-  return <section className="panel mb-6 max-w-4xl"><h2>Your plan: {access.plan.name}</h2><p className="mt-2 text-sm text-muted-foreground">Your access and allowances apply across study tools and connected services.</p><Link href="/plans" className="mt-3 inline-block text-primary underline">View plans</Link></section>;
+  return <section className="panel mb-6 max-w-4xl"><h2>Your plan: {access.plan.name}</h2><p className="mt-2 text-sm text-muted-foreground">Your access and allowances apply across study tools and connected services.</p><Link href="/plans" className="mt-3 inline-block text-primary underline">View plans</Link><Link href="/student/settings/billing" className="ml-5 inline-block text-primary underline">Billing settings</Link></section>;
 }

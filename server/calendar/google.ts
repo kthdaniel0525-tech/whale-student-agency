@@ -20,6 +20,9 @@ export class GoogleCalendarAdapter {
         this.client = { ...client, read(input) {
             if (signal?.aborted) throw new IntegrationError("PROVIDER_UNAVAILABLE");
             return client.read({ ...input, signal });
+        }, write(input) {
+            if (signal?.aborted) throw new IntegrationError("PROVIDER_UNAVAILABLE");
+            return client.write({ ...input, signal });
         } };
     }
     async listCalendars() {

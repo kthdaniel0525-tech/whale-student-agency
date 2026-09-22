@@ -583,7 +583,7 @@ describe.sequential("owned quiz retrieval and answer grading", () => {
       userAnswer: "Distractor B 1",
     };
     const first = await boundary.service.evaluateAnswer(answer, owner.headers);
-    const repeated = await boundary.service.evaluateAnswer(answer, owner.headers);
+    const repeated = await boundary.service.evaluateAnswer({ ...answer, startNewAttempt: true }, owner.headers);
     expect(first.feedback).not.toContain("missed repeatedly");
     expect(repeated.feedback).toContain("missed repeatedly");
     expect(repeated.feedback).toContain("use Tutor");

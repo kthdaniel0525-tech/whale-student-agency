@@ -1,12 +1,15 @@
 import {validKey,availableModel,googleError,fail,GeminiError} from '@/lib/gemini';
 import { z } from 'zod';
 import { reportSchema } from '@/lib/analysis';
+import { api, readJson } from '@/server/api';
+import { limitLegacyAI } from '@/server/security/legacy-ai';
+const inputSchema = z.object({ key: z.string().min(1).max(512), code: z.string().min(1).max(40000), model: z.string().max(200).optional() }).strict();
 export async function POST(req:Request) {
+ return api(req, async userId => {
+ await limitLegacyAI(userId);
+ const body = await readJson(req, inputSchema, 180000);
  const headers={'Cache-Control':'no-store'};
- if(req.headers.get('origin')&&req.headers.get('origin')!==new URL(req.url).origin)return Response.json({error:'허용되지 않은 요청입니다.'},{status:403,headers});
  try {
- const raw=await req.text();if(raw.length>90000)return Response.json({error:'요청이 너무 큽니다.'},{status:413,headers});
- let body;try{body=JSON.parse(raw);}catch{throw new GeminiError("올바르지 않은 요청입니다.",400);}
  const {code,model:requestedModel}=body||{};const key=validKey(body?.key);
  if(typeof code!=='string'||!code.trim()||code.length>40000)throw new GeminiError('코드는 1~40,000자까지 입력할 수 있습니다.',400);
  if(requestedModel!==undefined&&typeof requestedModel!=='string')throw new GeminiError('올바르지 않은 모델 설정입니다.',400);
@@ -20,4 +23,5 @@ export async function POST(req:Request) {
  let report;try{report=reportSchema.parse(JSON.parse(text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')));}catch{throw new GeminiError('AI 응답 형식이 올바르지 않습니다. 분석을 다시 시도하세요.');}
  return Response.json({...report,model},{headers});
  }catch(e){return fail(e);}
+ }, false);
 }

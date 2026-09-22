@@ -826,7 +826,6 @@ export async function recordQuestionEvaluation(rawInput: {
             where: {
               quizId: input.quizId,
               userId: input.userId,
-              completedAt: null,
               quiz: { userId: input.userId },
             },
             orderBy: [{ startedAt: "desc" }, { id: "desc" }],
@@ -848,8 +847,21 @@ export async function recordQuestionEvaluation(rawInput: {
             questionId: question.id,
           },
         },
-        select: { score: true, isCorrect: true },
+        select: { id: true, score: true, isCorrect: true, userAnswer: true, evaluationMethod: true },
       });
+      // A retry of the final answer must not silently create another practice
+      // session or make old evidence look recent. Retakes are explicit through
+      // startNewAttempt; unchanged submissions keep their original timestamps.
+      if (previous && previous.userAnswer === input.userAnswer &&
+          previous.score === input.score && previous.isCorrect === input.correct &&
+          previous.evaluationMethod === (input.method === "deterministic" ? "DETERMINISTIC" : "SEMANTIC")) {
+        return {
+          quizAttemptId: quizAttempt.id,
+          questionAttemptId: previous.id,
+          updatedTopicIds: topics.map((topic) => topic.id),
+          completed: quizAttempt.completedAt !== null,
+        };
+      }
       const sessions = new Map<string, boolean>();
       for (const topic of topics) {
         const priorInSession = await transaction.questionAttempt.count({

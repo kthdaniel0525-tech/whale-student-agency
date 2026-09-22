@@ -126,6 +126,7 @@ enum ConversationMessageRole {
 }
 
 model User {
+  deletionRequestedAt DateTime?
   id             String          @id
   name           String
   email          String          @unique
@@ -173,6 +174,9 @@ model User {
   aiUsageRecords AIUsageRecord[]
   aiEvaluations AIEvaluationRecord[]
   aiFeedback AIUserFeedback[]
+  billingCustomer BillingCustomer?
+  billingSubscriptions BillingSubscription[]
+  billingCheckout BillingCheckout?
   subscription UserSubscription?
   entitlementOverrides UserEntitlementOverride[]
   entitlementEvents EntitlementEvent[]
@@ -1405,6 +1409,8 @@ model CalendarIntegrationPreference {
 }
 
 model ExternalEventLink {
+  writeLeaseToken String?
+  writeLeaseUntil DateTime?
   id                     String @id @default(cuid())
   userId                 String
   provider               String @default("google")
@@ -1657,4 +1663,71 @@ model EntitlementUsageAdmission {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@index([userId, kind, createdAt])
   @@index([periodEnd])
+}
+
+// Billing stores only operational mappings. Entitlements consume UserSubscription.
+model BillingCustomer {
+  operationLeaseToken String?
+  operationLeaseUntil DateTime?
+  id String @id @default(cuid())
+  userId String @unique
+  provider String @default("stripe")
+  providerCustomerId String? @unique
+  currentSubscriptionId String?
+  lastReconciledAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model BillingSubscription {
+  id String @id @default(cuid())
+  userId String
+  providerSubscriptionId String @unique
+  providerPriceId String
+  billingInterval String
+  status String
+  amount Int
+  currency String
+  providerCreatedAt DateTime
+  pendingPlanCode String?
+  pendingInterval String?
+  pendingChangeAt DateTime?
+  lastSyncedAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([status, lastSyncedAt])
+  @@index([userId])
+}
+// Durable checkout intent supplies a server-owned idempotency key across crashes.
+model BillingCheckout {
+  id String @id @default(cuid())
+  userId String @unique
+  priceId String
+  providerSessionId String? @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model BillingWebhookEvent {
+  id String @id @default(cuid())
+  provider String @default("stripe")
+  providerEventId String @unique
+  eventType String
+  status String @default("pending")
+  receivedAt DateTime @default(now())
+  processedAt DateTime?
+  failureCode String?
+  @@index([status, receivedAt])
+}
+
+// Optional, explicitly configured financial mapping retention; never user content.
+model BillingRetentionRecord {
+  id String @id @default(cuid())
+  provider String @default("stripe")
+  providerCustomerId String
+  providerSubscriptionIds String[]
+  deletedAt DateTime @default(now())
+  retainUntil DateTime
+  @@index([retainUntil])
 }

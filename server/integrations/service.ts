@@ -299,14 +299,16 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       return runRequest(token => provider.download!({ ...request, capability: input.capability, accessToken: token }));
     }, async write(request) {
       if (input.capability !== "calendar-write") throw new IntegrationError("AUTHORIZATION_REQUIRED");
-      // Serialize an already-authorized write with disconnect. Once revocation commits,
-      // no new network mutation can begin. Feature code never receives the token.
-      return runRequest(token => db().$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT id FROM "ConnectedAccount" WHERE id=${input.connectedAccountId} AND "userId"=${input.userId} FOR UPDATE`;
-        const provider = usable(await owned(input.userId, input.connectedAccountId, tx), input.capability, input.provider);
+      // Feature services reserve durable idempotency keys/leases before sending.
+      // Never hold database locks across provider HTTP. Revalidate immediately
+      // before sending, and runRequest fences the response after disconnect.
+      // An external mutation already accepted by Google cannot be recalled.
+      return runRequest(async token => {
+        const provider = usable(await owned(input.userId, input.connectedAccountId), input.capability, input.provider);
         if (!provider.write) throw new IntegrationError("INVALID_REQUEST");
+        request.signal?.throwIfAborted();
         return provider.write({ ...request, capability: input.capability, accessToken: token });
-      }, transactionOptions));
+      });
     } };
     return operation(client);
   });

@@ -1,3 +1,4 @@
+import { reconcileBillingJob } from "./reconcile-billing";
 import "server-only";
 import { evaluateAIResponseJob } from "./evaluate-ai-response";
 import { syncExternalCourseJob, scheduleExternalCourseSyncJob } from "./sync-external-course";
@@ -10,6 +11,7 @@ import { deliverUserNotificationsJob, deliverReadyNotificationsJob } from "./del
 import { scheduledRecommendationRefreshJob } from "./scheduled-recommendations";
 
 export const BACKGROUND_JOBS = [
+  reconcileBillingJob,
   evaluateAIResponseJob,
   syncExternalCourseJob, scheduleExternalCourseSyncJob,
   importGoogleDriveFileJob,

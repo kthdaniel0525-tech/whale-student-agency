@@ -460,7 +460,31 @@ async function compressOwnedConversation(input: {
         ),
     ),
   ];
-  await db().conversationSummary.upsert({
+  // Generation runs without holding a database lock. Before saving, serialize
+  // with message deletion and verify the exact inputs are still current. This
+  // prevents an in-flight summary from restoring content the user just deleted.
+  return db().$transaction(async (transaction) => {
+    const conversation = await transaction.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Conversation"
+      WHERE id=${input.conversation.id} AND "userId"=${input.userId}
+      FOR UPDATE
+    `;
+    if (!conversation.length) return false;
+    const current = await transaction.conversationSummary.findFirst({
+      where: { conversationId: input.conversation.id, userId: input.userId },
+      select: { id: true, version: true },
+    });
+    if (current?.id !== summaryRow?.id || current?.version !== summaryRow?.version)
+      return false;
+    const remaining = await transaction.conversationMessage.count({
+      where: {
+        id: { in: selected.map((message) => message.id) },
+        conversationId: input.conversation.id,
+        userId: input.userId,
+      },
+    });
+    if (remaining !== selected.length) return false;
+    await transaction.conversationSummary.upsert({
     where: { conversationId: input.conversation.id },
     create: {
       conversationId: input.conversation.id,
@@ -479,8 +503,9 @@ async function compressOwnedConversation(input: {
       coveredUntilSequence: last.sequence,
       version: { increment: 1 },
     },
+    });
+    return true;
   });
-  return true;
 }
 
 export async function compressConversation(

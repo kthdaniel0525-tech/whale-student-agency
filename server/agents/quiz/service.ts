@@ -396,6 +396,10 @@ export class QuizAgentService {
       throw new QuizAgentError("STORAGE_FAILURE");
     }
     if (!question) throw new QuizAgentError("QUIZ_NOT_FOUND");
+    if (parsed.data.quizAttemptId && !await db().quizAttempt.findFirst({
+      where: { id: parsed.data.quizAttemptId, quizId: question.quizId, userId, quiz: { userId } },
+      select: { id: true },
+    })) throw new QuizAgentError("QUIZ_NOT_FOUND");
     await assertEntitlement(userId, "ai.quiz");
     const primaryTopicId = question.topicMappings[0]?.topicId;
     const recentOutcomes = await hasEntitlement(userId, "personalization.adaptive") ? await getRecentAdaptiveOutcomes({

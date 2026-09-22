@@ -25,6 +25,8 @@ async function removeIfPresent(file: string) {
 export const storage: DocumentStorage = {
   async put(key, data) {
     const dest = location(key);
+    if (!data.length || data.length > MAX_FILE_BYTES)
+      throw new DocumentError("Choose a non-empty file up to 10 MB.", 413);
     await mkdir(documentConfig().storage, { recursive: true, mode: 0o700 });
     const file = await open(dest + ".part", "wx", 0o600);
     try {

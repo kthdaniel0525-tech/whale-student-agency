@@ -32,7 +32,8 @@
     "embeddings:prepare": "node --conditions=react-server --import tsx scripts/prepare-embeddings.ts",
     "evals": "node --conditions=react-server --import tsx scripts/run-evals.ts",
     "test:evals": "vitest run tests/ai-evaluation.test.ts",
-    "plans:sync": "node --conditions=react-server --import tsx scripts/configure-plans.ts"
+    "plans:sync": "node --conditions=react-server --import tsx scripts/configure-plans.ts",
+    "billing:configure": "node --conditions=react-server --import tsx scripts/configure-billing.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -66,6 +67,7 @@
     "recharts": "^3.8.0",
     "server-only": "0.0.1",
     "sonner": "^2.0.8",
+    "stripe": "22.6.2",
     "tailwind-merge": "3.6.0",
     "vaul": "^1.1.2",
     "zod": "^3.25.76"
