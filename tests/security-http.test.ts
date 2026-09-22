@@ -78,10 +78,10 @@ describe.sequential("HTTP security boundaries", () => {
     expect((await api(request("/api/student/profile", { cookie: cookies(signedIn) }), async () => ({ ok: true }), false)).status).toBe(401);
   });
   it("redacts upstream authentication diagnostics", async () => {
-    const logger = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logger = vi.spyOn(console, "error").mockImplementation(() => {});
     const context = await auth().$context;
     context.logger.error("private-callback-and-token", { email, password });
-    expect(logger).toHaveBeenCalledWith("Authentication diagnostic", { level: "error" });
+    expect(JSON.parse(logger.mock.calls[0][0] as string)).toMatchObject({ event: "authentication-diagnostic", level: "error", requestId: expect.any(String) });
     expect(JSON.stringify(logger.mock.calls)).not.toMatch(/private-callback|passphrase|@example/);
   });
   it.each(["P2002", "P2003", "P2025", "ECONNREFUSED", "STORAGE_FAILURE", "INVALID_RESPONSE"])("does not disclose raw %s errors or log their messages", async code => {

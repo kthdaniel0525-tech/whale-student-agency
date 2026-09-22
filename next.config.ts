@@ -31,6 +31,7 @@ const nextConfig: NextConfig = {
     "./node_modules/@napi-rs/canvas*/**/*",
   ] },
   serverExternalPackages: [
+    "@sentry/node",
     "@huggingface/transformers",
     "onnxruntime-node",
     "pdfjs-dist",

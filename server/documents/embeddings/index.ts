@@ -61,6 +61,9 @@ async function model() {
   }
   return pipelinePromise;
 }
+/** Operator-only cache preparation: loads the exact existing model without a
+ * user inference, telemetry entry, budget reservation or embedding backfill. */
+export async function prepareEmbeddingModel(): Promise<void> { await model(); }
 const localTransport: AIEmbeddingProvider = trackEmbeddingProvider({
   async generateEmbedding(request) {
     if (request.signal?.aborted) throw new AIError("CANCELLED");

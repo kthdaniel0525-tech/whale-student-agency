@@ -1,3 +1,4 @@
+import { logOperation, reportError } from "../../operations/monitoring";
 import { getModelCatalog } from "../routing/catalog";
 import { aiAllowances, type AIAllowanceService } from "../../entitlements/usage";
 import "server-only";
@@ -49,6 +50,7 @@ async function attempt(request: AITextRequest | AIEmbeddingRequest, operation: A
     if (done) return;
     done = true;
     const latencyMs = Math.max(0, Math.round(clock() - started));
+    if (error instanceof AIError && ["PROVIDER_FAILURE", "AUTHENTICATION", "INVALID_RESPONSE", "TIMEOUT"].includes(error.code)) reportError(error, { requestId: context.requestId, agentId: context.agentId, workflowId: context.workflowId, provider: options.provider, errorCode: error.code });
     try {
       const reported = usageSchema.safeParse(response?.usage ?? (error instanceof AIError ? error.usage : undefined));
       let usage: AIUsage | undefined = reported.success ? reported.data : undefined;
@@ -65,14 +67,14 @@ async function attempt(request: AITextRequest | AIEmbeddingRequest, operation: A
       const cost = estimateCost(options.provider, model, usage, options.pricing);
       await guard.finish(usage, cost.estimatedCostUsd);
       if (!context.userId) {
-        if (!warnedUnowned) { warnedUnowned = true; console.warn("AI usage not persisted", { code: "MISSING_USAGE_OWNER" }); }
+        if (!warnedUnowned) { warnedUnowned = true; logOperation("warn", "ai-usage-unowned", { errorCode: "MISSING_USAGE_OWNER" }); }
         return;
       }
       const priceKey = `${options.provider}:${model}`;
       if (usage && cost.estimatedCostUsd === null && !missingPrices.has(priceKey)) {
         if (missingPrices.size >= 200) missingPrices.clear();
         missingPrices.add(priceKey);
-        console.warn("AI usage pricing unavailable", { code: "MISSING_MODEL_PRICING" });
+        logOperation("warn", "ai-pricing-unavailable", { errorCode: "MISSING_MODEL_PRICING" });
       }
       const record = usageRecordSchema.parse({
         ...context, id, createdAt, provider: options.provider, model,
@@ -91,9 +93,9 @@ async function attempt(request: AITextRequest | AIEmbeddingRequest, operation: A
       // Release only after durable usage. Unknown provider charges retain a bounded
       // reservation until period end instead of granting unaccounted free usage.
       if (usage) await allowance.release();
-    } catch {
-      // Do not log the exception: DB/provider errors may echo private input.
-      console.error("AI usage persistence failed", { code: "USAGE_WRITE_FAILED", attemptId: id });
+    } catch (error) {
+      // Sentry receives only the final allowlisted event; never raw request data.
+      reportError(error, { requestId: context.requestId, errorCode: "USAGE_WRITE_FAILED" });
     } finally {
       await guard.finish();
     }

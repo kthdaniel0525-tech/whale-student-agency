@@ -1,4 +1,5 @@
 import "server-only";
+import { captureUsageContext } from "../ai/usage/context";
 import { randomUUID } from "node:crypto";
 import { fromPrisma } from "pg-boss";
 import { z } from "zod";
@@ -129,9 +130,7 @@ export async function enqueueTrackedUserJob<Payload extends {
           jobVersion: definition.version,
           userId,
           resourceId: options.resourceId,
-          metadata: options.sourceEvent
-            ? { sourceEvent: options.sourceEvent }
-            : undefined,
+          metadata: { ...(options.sourceEvent ? { sourceEvent: options.sourceEvent } : {}), requestId: captureUsageContext().requestId! },
         },
       });
       const acceptedId = await publisher.sendDebounced(

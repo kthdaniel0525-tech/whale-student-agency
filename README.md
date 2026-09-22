@@ -54,3 +54,6 @@ LMS / Course Import Foundation: [provider contract, mapping policy, sync and ver
 Integration hardening: [failure handling, security, health, verification and operational limits](docs/integration-hardening.md).
 
 AI usage: [token tracking, estimated pricing, attribution, aggregation and privacy](docs/ai-usage.md).
+## Production deployment
+
+The persistent container deployment, secret templates, health checks, staging/release pipeline and operational runbook are documented in [Production operations](docs/production-operations.md). Production requires a configured host/domain, separate secrets, monitoring and verified off-host backups; local development is not a deployed environment.

@@ -1,29 +1,59 @@
-name: AI quality contracts
+name: Production quality gates
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
   deterministic:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
-      DATABASE_URL: postgresql://unused:unused@localhost:5432/unused
+      APP_ENV: test
+      DATABASE_URL: postgresql://student:ci-disposable-only@localhost:5439/student_agency
+      POSTGRES_PASSWORD: ci-disposable-only
+      BETTER_AUTH_URL: http://localhost:3000
       AI_EVAL_SAMPLING_ENABLED: 'false'
+      BACKGROUND_JOB_SCHEDULE_ENABLED: 'false'
+      LOG_LEVEL: error
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.20.0'
           cache: npm
+      - name: Ephemeral test authentication secret
+        run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 48)" >> "$GITHUB_ENV"
       - run: npm run install:ci
+      - run: docker compose up -d --build --wait
       - run: npm run db:generate
-      - run: npm run test:evals
+      - run: npm run db:migrate
+      - run: npm run plans:sync
+      - run: npm run embeddings:prepare
+      - run: npm run check
+      - run: npm run lint
+      - name: Start isolated HTTP test server
+        run: |
+          npm run dev > /tmp/agency-test-server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            curl --silent --fail http://localhost:3000/sign-in > /dev/null && exit 0
+            sleep 2
+          done
+          exit 1
+      - run: npm test
       - run: npm run evals -- --mode FAST_SMOKE --out /tmp/ai-quality-smoke.json
+      - run: npm run test:migration
+      - run: npm audit --audit-level=moderate
+      - name: Secret-free production build
+        run: env -u DATABASE_URL -u BETTER_AUTH_SECRET -u BETTER_AUTH_URL npm run build -- --webpack
+      - run: node scripts/verify-pdf-build.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: deterministic-quality-report
           path: /tmp/ai-quality-smoke.json
+      - if: always()
+        run: docker compose down --volumes

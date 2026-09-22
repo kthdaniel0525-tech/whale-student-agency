@@ -1,0 +1,124 @@
+# Production deployment and monitoring
+
+## Topology and launch boundary
+
+V1 uses one persistent Linux host per environment: Caddy HTTPS → Next.js Node web/API; PostgreSQL 17.11 + pgvector 0.8.2; separate pg-boss and document worker containers. Web and workers share private document/model volumes. Caddy serves static assets through Next; no separate CDN is required. OpenAI, Google OAuth/Calendar/Drive and Stripe remain outbound services. OAuth callback and Stripe webhook enter through the canonical HTTPS origin. Sentry receives redacted server exceptions; the internal metrics endpoint reuses existing AI/job/integration/billing records.
+
+The historical `.openai/hosting.json` target cannot host this PostgreSQL/Node/worker topology. `compose.yaml` remains local development only. `compose.production.yaml` is the production and staging topology. This is a single-host deployment with a short web restart window, **not high availability or zero downtime**. Start with measured headroom for Node, native embeddings and PostgreSQL (for example 4 CPU/8 GB), then load-test; this is a sizing hypothesis, not a capacity guarantee.
+
+No live host, DNS, certificates, Sentry project, off-host backups, provider approval or alert delivery has been provisioned by this repository. They are launch prerequisites. The release workflow requires dedicated trusted runners and protected GitHub environments configured by an operator.
+
+## First environment setup
+
+1. Provision separate staging/production hosts (or fully isolated networks/ports), encrypted disks, Docker Compose and Node 24.20.0. Permit only HTTPS/HTTP and restricted administrative access; do not publish database or web-container ports. Attach a DNS record to the host. No CDN precedes Caddy in this configuration. If added later, configure only its documented proxy CIDRs before trusting forwarded IPs.
+2. Create `/etc/agency/compose.env` from `deploy/compose.env.example`; choose a unique project name, domain and external secret directory. Keep filled files outside git. The secret directory is administrator-only; mount files readable by container UID 1000 via controlled group/ACL (Compose file secrets preserve host permissions). Do not make secrets world-readable to fix a mount permission error.
+3. Create `db-owner-password` and `db-app-password` using separate random hexadecimal values (`openssl rand -hex 32`). Use the app password in `runtime.env`; create `migration.env` with the same runtime settings but the `agency_owner` database login/password. Runtime `agency_app` is not a superuser, cannot create roles/databases and does not own academic tables. It can create/manage the pg-boss schema. Only release migrations use the administrator credential.
+4. Copy and fill `deploy/runtime.env.example`. `APP_URL` and `BETTER_AUTH_URL` must match exactly. Use separate auth secrets, operations token, AI project/key, OAuth client, encryption ring, Sentry environment, Stripe account/mode and volumes for each environment. `NODE_ENV=production` is used in staging too; `APP_ENV` distinguishes the environments. `RELEASE_SHA` is baked into the image.
+5. Review `deploy/plans.example.json`, copy it to the secret directory as `plans.json` and adjust approved allowances. Bootstrap is idempotent and only upserts these explicit public system plans. It never creates demo users/content/internal unlimited plans. Include every plan referenced by live Stripe prices. Development auto-seeding is disabled in deployed runtimes.
+6. Keep billing and external integration flags disabled until verified. For closed beta, set exact `SIGNUP_EMAIL_ALLOWLIST` addresses; `SIGNUP_ENABLED=false` stops all new signups while existing users can sign in. Provision a synthetic smoke account through normal staging signup/onboarding. Never copy production academic content into staging.
+
+## Build, release and rollback
+
+Quality gates run TypeScript, lint, the complete test suite, deterministic `FAST_SMOKE` AI evals, a fresh migration test, dependency audit, production build and built PDF-worker smoke. All use a disposable database and synthetic/provider-boundary fixtures. They never receive production secrets. The full integration suite refuses `APP_ENV=production|staging`.
+
+Build an immutable image (the workflow publishes to GHCR):
+
+```sh
+docker build -f docker/app.Dockerfile --build-arg RELEASE_SHA="$RELEASE_SHA" -t "$IMAGE_TAG" .
+node scripts/deploy-release.mjs check /etc/agency/compose.env "$IMAGE_DIGEST"
+node scripts/deploy-release.mjs deploy /etc/agency/compose.env "$IMAGE_DIGEST"
+```
+
+`IMAGE_DIGEST` must use `registry/repository@sha256:…`, never `latest`. Deploy runs: pull → database readiness → private volume initialization → Prisma migrations → system plans/pg-boss bootstrap → pinned model cache preparation → web/workers → readiness and non-destructive smoke. Model preparation reuses the cache and **never regenerates document vectors**. Review/save the previous image digest and configuration before release. PostgreSQL's image is built from the checked-in Dockerfile when first started; stage the same database version before production. Container dependencies receive security updates through reviewed rebuilds, not unattended version changes.
+
+`.github/workflows/release.yml` is manually dispatched from main. It runs all quality gates, builds one image, deploys staging, runs authenticated smoke, then promotes the same digest through the production environment. Set required reviewers, main-only deployment restrictions, `APP_URL`, a synthetic `SMOKE_COOKIE`, GHCR pull authentication on each host, and runner labels `agency-staging` / `agency-production`. Never use these runners for untrusted PR jobs. Production additionally requires `BACKUP_RECEIPT_FILE` pointing to reviewed backup/restore evidence; the file itself is not proof of a valid backup.
+
+Rollback does not run migrations or seed older plan definitions:
+
+```sh
+SCHEMA_COMPATIBILITY_REVIEWED=true node scripts/deploy-release.mjs rollback /etc/agency/compose.env "$PREVIOUS_IMAGE_DIGEST"
+```
+
+Review compatibility with the *current* schema and persisted job payload versions first. Restore the matching feature/provider configuration if needed. A failed release stops and preserves evidence; it does not automatically reverse DB changes. Use a forward-fix migration for schema faults; restore only under an incident plan because restoring loses writes since the snapshot. Use expand → deploy/backfill → contract in a later release for future incompatible changes.
+
+## Database migration audit and recovery
+
+The 35 pre-existing migrations are preserved. They create new tables/constraints/indexes, add nullable or defaulted columns and extend enums. No existing migration drops an academic table/column. Risks on populated databases still need staging rehearsal:
+
+- `memory_personalization` replaces the old unique memory index with a category-aware index. Existing rows receive `PREFERENCE`; existing uniqueness prevents a new duplicate under that default. Index creation/constraint validation can lock large tables.
+- `automation_settings` backfills quiet-hour preferences and reminder schedules. Its JSON timestamp cast requires valid `originalScheduledFor` values. Audit those values/counts on a sanitized staging copy before upgrading an older deployment; repair malformed legacy values explicitly before migration.
+- Existing ownership foreign keys and unique indexes validate existing rows and may block concurrent writes. Non-null additions use defaults; this does not imply every DDL statement is lock-free. Set a reviewed lock timeout for release connections; measure duration on representative data.
+- This release adds only `RuntimeHeartbeat` and two operational query indexes. Each concurrent index has its own single-statement migration. If interrupted, inspect `pg_index.indisvalid`, remove only that failed index concurrently, then use `prisma migrate resolve --rolled-back <failed-name>` and rerun. Never edit successful migration checksums.
+
+Readiness verifies checked-in migration names/checksums, unfinished migrations, pgvector version, required base-plan schema, private storage and pinned model files. Newer extra migrations are permitted for compatible application rollback. Migration tests create/drop a randomly named temporary DB and apply all migrations; the development DB is also upgraded in place during verification. A production-size rehearsal is still required before first live rollout.
+
+Document vectors remain 384-dimensional, pinned to `RAG_EMBEDDING` model/revision/preprocessing ID. Document retrieval is exact over owner/course/document-filtered rows, with the existing ownership/filter indexes; conversation/memory vectors retain their existing HNSW indexes. Do not silently change this model or dimension. A future model change needs a versioned backfill, coverage validation and explicit retrieval cutover. `scripts/query-plan-check.mjs` records bounded read-only EXPLAIN baselines without logging content. Its local synthetic results are not production load-test evidence.
+
+## Storage and workers
+
+Documents are stored outside application/static assets in `/data/documents`, shared across web/document/job workers, with existing ownership checks, UUID storage keys, private modes, 10 MB upload limits, content validation and safe deletion. Drive imports use the same path. There are no direct public bucket/browser uploads and no bucket CORS configuration. Container root filesystems are read-only; temporary parser/cache files use tmpfs. Host disk encryption and backup are mandatory operational requirements, not implemented by Docker volumes.
+
+The embedding cache is a separate persistent volume at `/data/models`. Preparation downloads only the existing pinned model; serving containers reject download-enabled configuration. Keep both volumes when replacing containers. **Never use `compose down --volumes` on staging/production.**
+
+Web/worker Prisma pools default to 8 each; web adds a 2-connection health/metrics pool and 2-connection queue publisher. pg-boss workers use concurrency + 4 DB connections; concurrency is per registered queue. Budget the total process/replica count below PostgreSQL's connection limit with admin headroom. pg-boss requires a direct/session connection supporting LISTEN/NOTIFY, not transaction pooling. Scale only after observing connection/CPU/memory/queue metrics.
+
+pg-boss owns persistent retries, debounce/idempotency, versioned payloads and dead letters. Worker shutdown drains up to 25 seconds; Compose permits 40 seconds. Document shutdown can interrupt parsing; the existing database lease/watchdog recovers it. Existing fenced completion prevents stale workers overwriting newer work. Deploy payload changes additively and keep previous handlers until old deliveries drain; never reuse a version for a different payload.
+
+Schedules use stable pg-boss keys, UTC and missed-run coalescing (`once`); native scheduler leadership prevents replica duplication. Daily recommendation sweep, five-minute notifications/account deletion, hourly OAuth cleanup, Calendar/LMS polling and ten-minute billing reconciliation are registered by workers. Reminder refreshes also use domain events. User timezone remains in preference logic. `BACKGROUND_JOB_SCHEDULE_ENABLED=false` disables scheduler execution after workers restart; existing persisted schedule rows are retained. For full containment stop workers as well (queued work can still execute). Expired OAuth handshakes, queue retention and account/file deletion reuse existing cleanup; no new academic-content retention policy is introduced. Expired billing retention is purged by the existing account-deletion job.
+
+## OAuth, billing and secret rotation
+
+Google redirect URI is exactly `https://YOUR_DOMAIN/api/student/integrations/google/callback`. Register separate staging/production clients, domains, consent-screen name, support/privacy URLs and only existing required scopes; obtain approval where required. Reconnect/rate-limit/backoff behavior remains in the existing integration layer. Provider quota ceilings depend on the actual Google project; record those values in the operator inventory and alert before exhaustion. No live quotas are assumed here.
+
+Stripe webhook is `https://YOUR_DOMAIN/api/billing/webhook`; the route bounds and verifies raw signed body bytes, accepts retries, and sits outside authenticated/CSRF application API handling. Staging requires `BILLING_ENVIRONMENT=staging`, `BILLING_MODE=test`, test keys/customers/prices. Production requires production/live matching keys, unique reviewed prices, correct currency, portal configuration and a live webhook secret. Run `billing:configure` and verify provider-side mappings in the correct environment before enabling checkout. Test checkout/portal/webhook/reconciliation in staging; **no test charges are run against production**. Critical redirects always use the configured origin, not forwarded headers.
+
+- Auth secret: generate a new random secret, update all web/workers together and expect existing sessions to require login. Keep rollback credentials under incident control.
+- OpenAI/OAuth client secrets: issue the replacement in the environment-specific provider project, deploy it, verify, then revoke the old key. Never share production keys with CI tests.
+- Stripe webhook secret: coordinate provider rotation/grace period, replace secret, verify signed test deliveries and retry pending events; do not disable signature verification.
+- Encryption ring: add the new key ID while retaining old keys, deploy readers everywhere, then change active write key. Existing ciphertext retains its key ID. Keep old keys until every relevant token/cursor/config field has been explicitly re-encrypted or expired/reconnected and verified; **there is no automatic full re-encryption command**. Never immediately replace the ring with only the new key.
+- Database/operations/Sentry secrets: stage new credentials and restart affected roles. PostgreSQL init scripts do not rotate passwords on existing volumes; use a controlled `ALTER ROLE` session without logging plaintext, then update matching secret files.
+
+## Monitoring, privacy and alerts
+
+`/api/health/live` checks the process; `/api/health/ready` checks critical local dependencies, caches results for 10 seconds and uses bounded DB timeouts. Both return only a coarse status; neither calls an AI or Google provider. `/api/operations/metrics` requires a separate bearer token (missing/incorrect → 404), caches 30 seconds and is never a user dashboard. Use a private monitoring network/firewall if possible; do not send its token in a URL.
+
+Metrics include the last 24 hours of AI cost/calls/failures/fallbacks/embeddings/latency/unpriced calls, cost per active AI user and per agent/workflow; existing provider circuit health; job status/retries/duration/backlog/dead-letter queues; sync/webhook status; worker heartbeats; DB size/connections/waiting locks. Cost is estimated and unpriced calls remain visible. Existing guardrails are the prevention layer. First-token latency is **not currently persisted**; total provider latency is not presented as TTFT. Browser/workflow timing can be added to the same telemetry later.
+
+Sentry server SDK uses no automatic integrations, tracing or breadcrumbs. Its final event boundary removes request objects, users/emails, cookies, headers, prompts, documents, raw error messages and arbitrary context; only allowlisted correlation fields and safe source filenames/line numbers remain. Structured application logs have debug/info/warn/error levels, no content and an image release ID. Request IDs propagate into AI/workflow contexts; queued jobs retain parent request attribution in their existing metadata. Caddy access logging stays disabled to prevent OAuth query leakage. Container log rotation is bounded; configure access-restricted log retention and a Sentry retention policy before launch (suggested initial policy: 14 days operational logs, 30 days error metadata, review legal/business requirements).
+
+Configure one Sentry project with staging/production environment filters and notification recipients. Configure an external HTTPS probe for readiness every minute, alert after three consecutive failures, and scrape internal metrics every minute. Alert setup/delivery cannot be claimed complete until the operator performs a test notification. Initial thresholds are tunable, not SLAs:
+
+- SEV1: data exposure, billing corruption, or core auth/database outage. Contain immediately, preserve safe evidence, disable checkout/integration/AI as relevant; page the owner.
+- SEV2: readiness unavailable 3 minutes; missing worker heartbeat >90 seconds for 3 probes; 5xx >2% with ≥20 requests/5 minutes; failed billing webhook persisting >10 minutes; job failures ≥5/10 minutes or ready backlog >100 for 10 minutes. Investigate dependencies, release changes and backlog before retrying.
+- SEV3: reconnect-required integration growth, sustained AI failure >10% with ≥20 calls/10 minutes, provider circuit open, unpriced usage, p95 latency regression >2× the measured baseline. Notify during support hours unless core work is blocked.
+- Cost detection: set a reviewed absolute daily USD cap plus >2× the seven-day baseline, and similar call/embedding/workflow-call spike thresholds with minimum sample counts. No arbitrary billing amount is enabled by code. Use existing user/workflow usage guards and provider project budgets for containment.
+
+Use PostgreSQL `pg_stat_activity`, `pg_stat_database`, `pg_locks`, host disk/connection monitoring and provider-native tools; do not enable raw SQL parameter logging. Alert at sustained >75% connection utilization and <20% free disk, tuned after load tests. Request logs capture response-header duration; streaming completion/provider latency comes from existing AI usage. Start by measuring dashboard/course/progress/notification p95 and AI total latency. Provisional non-AI server-response budget: <1 second p95 under expected beta load, to be validated. No measured production baseline or TTFT guarantee exists yet.
+
+Caches retain current ownership keys and private/no-store authenticated responses. Public static hashed assets may be cached; never cache personalized routes, OAuth callbacks, auth or billing responses publicly. Existing auth and AI rate limits use PostgreSQL shared state, not per-process counters. Caddy also excludes HTTP error logs because upstream failures can include raw callback URLs; external readiness probes detect edge outages. No product analytics collector/dashboard was added; request/job/workflow IDs provide safe future instrumentation hooks without recording academic content.
+
+## Smoke tests and incident actions
+
+`SMOKE_ORIGIN=https://... npm run ops:smoke` checks health, login headers, unauthorized academic/metrics boundaries. Add a secret `SMOKE_COOKIE` from an existing synthetic account to check login/session/dashboard/courses; add the private operations token to require live workers/queues. It makes no LLM calls, charges or user-data writes. `scripts/staging-functional-smoke.mjs` separately tests bounded AI/RAG requests against explicitly supplied synthetic staging fixtures. Google consent requires a human/test-account check; billing checkout uses provider test mode only. Deterministic integration suites cover provider failures, fallback, signed webhooks, queues and ownership without live credentials.
+
+- Bad release: stop promotion, inspect redacted errors by release/request ID, roll back the image only after schema review.
+- AI/provider/high-cost incident: set existing `AI_GUARDRAILS_JSON` (`disableAllAI`, `disableBackgroundAI`, `disabledFeatures`), `AI_RELIABILITY_JSON` disabled providers or reviewed catalog `enabled:false`; restart roles, verify no new calls. Preserve quality floors when enabling fallbacks.
+- Integration outage/reconnect: use entitlement flags `integration.calendar/drive/lms:false`, inspect safe sync/error codes, respect retry-after and reconnect through settings. Do not log decrypted credentials.
+- Billing failure: set `BILLING_CHECKOUT_ENABLED=false`, keep signed webhooks/reconciliation available; verify mode/mapping/portal/secret and replay provider events after fixing configuration. Never manually grant plans from unverified payloads.
+- Job failure: inspect JobRun/dead-letter counts and safe error codes, fix root cause, then replay only reviewed idempotent/version-compatible jobs. Do not bulk-delete queues. For DB outage restore connectivity before workers; retry leases are durable.
+
+## Backup and restore requirements
+
+Docker volumes are **not backups**. Before launch configure encrypted off-host PostgreSQL backups/WAL archiving or host/provider snapshots plus independent document-volume backups. Target an initially reviewed RPO ≤24 hours/RTO ≤4 hours only after an actual timed restore; choose tighter WAL/PITR if the product requires it. Suggested retention: daily 14 days, weekly 8 weeks; ensure off-host access and deletion/retention policy are reviewed. These jobs, retention and alerts require host/provider configuration and are not claimed to exist.
+
+For a consistent first backup, stop web and both writers briefly, take a PostgreSQL custom-format dump and a document-volume snapshot/archive, record image digest/config/migration state, then restart. Encrypt and copy both off-host; record checksums, backup time, object count and storage location in the backup receipt. The pinned model cache is reproducible; auth/encryption keys must be backed up separately in the secret manager, never inside public backup logs.
+
+Monthly and before first launch, restore DB and matching private document backup to an isolated restore environment with outbound OAuth/billing/AI and schedules disabled. Verify migrations, row counts, owner-restricted downloads, vector retrieval, account deletion/file-cleanup behavior and a synthetic login; measure elapsed restore time and verify checksums. Do not point a restore test at production provider accounts or user email recipients. Destroy the isolated copy under the approved retention procedure. Never perform a destructive production restore as an ordinary deploy step.
+
+References: [Docker production Compose](https://docs.docker.com/compose/how-tos/production/), [Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/), [Caddy proxy trust](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy), [Sentry server options](https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/).
+
+## Verification performed for this change
+
+Local verification on 2026-09-22: TypeScript passed; lint had zero errors and four existing navigation warnings; all 68 test files / 1,679 tests passed; 30 deterministic eval cases had zero failed checks. All 38 migrations passed on a fresh temporary database, and this release's migrations also upgraded the existing local database. Dependency audit reported zero vulnerabilities. The secret-free Linux production image built successfully; its compiled PDF worker passed extraction/failure/page-limit checks. A scan of 814 tracked/unignored candidate files found no matching private keys/provider tokens (pattern scanning is not a guarantee of absence).
+
+A separate Compose environment passed HTTPS signup allowlisting, secure cookies, authenticated dashboard/course reads, nine deployment smoke checks, restricted-role bootstrap, model-cache preparation with AI disabled, actual reminder/recommendation/notification job completion and request attribution. Adding a second worker left six enabled schedules unchanged. During a simulated DB outage, liveness stayed 200 and readiness became 503; recovery passed all nine smoke checks. The Sentry SDK envelope was verified with a mocked transport. The verification containers and synthetic volumes were removed afterward. These results do not establish live provider approval, external alert delivery, production backups or production load capacity.

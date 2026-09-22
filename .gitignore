@@ -54,3 +54,7 @@ next-env.d.ts
 # Private uploads, model cache and database backups
 /.local/
 app.code-workspace
+
+# Deployment credentials and local environment files
+/deploy/secrets/
+/deploy/*.env

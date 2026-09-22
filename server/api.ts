@@ -1,3 +1,4 @@
+import { observeRequest, reportError, safeRoute } from "./operations/monitoring";
 import { BillingError } from "./billing/errors";
 import { EntitlementError } from "./entitlements/errors";
 import "server-only";
@@ -67,7 +68,7 @@ export async function readJson<Output, Input>(
   }
   return schema.parse(json);
 }
-export async function api(
+async function apiOperation(
   request: Request,
   operation: (userId: string) => Promise<unknown>,
   needsProfile = true,
@@ -162,12 +163,14 @@ export async function api(
         { status, headers: noStore },
       );
     }
-    console.error("Student API request failed", {
-      type: error instanceof Error ? error.name : "UnknownError",
-    });
+    reportError(error, { route: safeRoute(request) });
     return Response.json(
       { error: "Unable to save or load your data. Please try again." },
       { status: 500, headers: noStore },
     );
   }
+}
+
+export function api(request: Request, operation: (userId: string) => Promise<unknown>, needsProfile = true) {
+  return observeRequest(request, () => apiOperation(request, operation, needsProfile));
 }

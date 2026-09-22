@@ -5,7 +5,7 @@ import { getBackgroundJobConfig } from "./config";
 export type BackgroundJobPublisher = Pick<PgBoss, "sendDebounced">;
 
 export function createBackgroundJobBoss(
-  role: "publisher" | "worker",
+  role: "publisher" | "worker" | "migration",
   overrides: { connectionString?: string; schema?: string } = {},
 ): PgBoss {
   const config = getBackgroundJobConfig();
@@ -15,8 +15,8 @@ export function createBackgroundJobBoss(
     application_name: `student-agency-background-${role}`,
     max: role === "worker" ? config.workerConcurrency + 4 : 2,
     connectionTimeoutMillis: 5000,
-    createSchema: role === "worker",
-    migrate: role === "worker",
+    createSchema: role === "migration" || role === "worker" && process.env.NODE_ENV !== "production",
+    migrate: role === "migration" || role === "worker" && process.env.NODE_ENV !== "production",
     supervise: role === "worker",
     schedule: role === "worker" && config.scheduleEnabled,
     useListenNotify: role === "worker",

@@ -1,4 +1,6 @@
 import "server-only";
+import { logOperation } from "../operations/monitoring";
+import { signupAllowed } from "../operations/config";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { db } from "@/server/db/client";
@@ -11,10 +13,10 @@ function createAuth() {
     secret: env.BETTER_AUTH_SECRET,
     // Upstream auth diagnostics may include emails, callback URLs or database
     // errors. Emit only severity; the request boundary supplies safe failures.
-    logger: { level: "warn", log: (level) => { console.warn("Authentication diagnostic", { level }); } },
+    logger: { level: "warn", log: (level) => { logOperation(level === "error" ? "error" : "warn", "authentication-diagnostic"); } },
     trustedOrigins: [new URL(env.BETTER_AUTH_URL).origin],
     databaseHooks: {
-      user: { create: { after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); } } },
+      user: { create: { before: async (user) => signupAllowed(user.email) ? undefined : false, after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); } } },
       session: { create: { before: async (session) => {
         const { assertActiveUser, AccountUnavailableError } = await import("../privacy/account-state");
         try { await assertActiveUser(session.userId); }

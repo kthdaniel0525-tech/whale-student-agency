@@ -276,6 +276,16 @@ model AIUsageRecord {
   @@index([userId, requestId])
   @@index([userId, operationType, createdAt])
   @@index([userId, selectedTier, createdAt])
+  @@index([createdAt])
+}
+
+// Operational process leases only; no user or job payload data.
+model RuntimeHeartbeat {
+  id String @id
+  role String
+  release String
+  seenAt DateTime @default(now())
+  @@index([role, seenAt])
 }
 
 enum JobRunStatus {
@@ -309,6 +319,7 @@ model JobRun {
 
   @@index([jobName, status, createdAt])
   @@index([userId, jobName, status, createdAt])
+  @@index([status, createdAt])
 }
 
 enum WorkflowRunStatus {

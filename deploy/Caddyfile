@@ -1,0 +1,32 @@
+{
+  email {$ACME_EMAIL}
+  admin off
+  # Upstream connection errors can otherwise include the full callback URI.
+  # Observe edge failures with external probes; keep content out of edge logs.
+  log {
+    exclude http.log.access http.log.error
+  }
+  servers {
+    timeouts {
+      read_header 10s
+      idle 2m
+    }
+  }
+}
+{$APP_DOMAIN} {
+  request_body {
+    max_size 12MB
+  }
+  # Access logging stays off: callback URLs contain temporary credentials.
+  # The application emits redacted structured request logs.
+  reverse_proxy web:3000 {
+    header_up Host {$APP_DOMAIN}
+    header_up X-Forwarded-Host {$APP_DOMAIN}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    header_up -Forwarded
+    header_up -X-Real-IP
+    header_up -X-Request-ID
+    flush_interval -1
+  }
+}

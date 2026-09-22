@@ -1,3 +1,5 @@
+import { observeRequest, reportError } from "@/server/operations/monitoring";
+import { signupAllowed } from "@/server/operations/config";
 import { z } from "zod";
 import { limitCredentialAttempts } from "@/server/auth/rate-limit";
 import { auth } from "@/server/auth/config";
@@ -20,14 +22,14 @@ function validateRedirects(input: Record<string, unknown>) {
     if (!valid) throw new RequestError("Choose a destination within this application.", 403);
   }
 }
-export async function GET(request: Request) {
+async function getAuth(request: Request) {
   if (directDeletion(request)) return Response.json({ message: "Use account settings to delete your account." }, { status: 403, headers: safeHeaders });
   try {
     for (const [name, value] of new URL(request.url).searchParams) validateRedirects({ [name]: value });
   } catch { return Response.json({ message: "Choose a destination within this application." }, { status: 403, headers: safeHeaders }); }
   return auth().handler(request);
 }
-export async function POST(request: Request) {
+async function postAuth(request: Request) {
   try {
     checkOrigin(request);
     if (directDeletion(request)) throw new RequestError("Use account settings to delete your account.", 403);
@@ -45,6 +47,7 @@ export async function POST(request: Request) {
           });
       const data = await readJson(request, schema.strict());
       validateRedirects(data);
+      if (path.endsWith("/sign-up/email") && !signupAllowed(data.email)) throw new RequestError("Registration is currently limited to invited beta users.", 403);
       const retryAfter = await limitCredentialAttempts(data.email, path);
       if (retryAfter !== null)
         return Response.json(
@@ -94,12 +97,13 @@ export async function POST(request: Request) {
         { message: error.message },
         { status: error.status, headers: safeHeaders },
       );
-    console.error("Authentication unavailable", {
-      type: error instanceof Error ? error.name : "UnknownError",
-    });
+    reportError(error, { route: "/api/auth/[resource]" });
     return Response.json(
       { message: "Authentication is unavailable. Please try again." },
       { status: 503, headers: safeHeaders },
     );
   }
 }
+
+export function GET(request: Request) { return observeRequest(request, () => getAuth(request)); }
+export function POST(request: Request) { return observeRequest(request, () => postAuth(request)); }

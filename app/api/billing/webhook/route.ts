@@ -1,7 +1,8 @@
+import { observeRequest, reportError } from "@/server/operations/monitoring";
 import { BillingError } from "@/server/billing/errors";
 import { billingProvider, processBillingEvent } from "@/server/billing/service";
 export const runtime = "nodejs";
-export async function POST(request: Request) {
+async function webhook(request: Request) {
   try {
     const signature = request.headers.get("stripe-signature");
     if (!signature) throw new BillingError("BILLING_SIGNATURE", 400);
@@ -22,8 +23,11 @@ export async function POST(request: Request) {
     return Response.json(await processBillingEvent(event, provider));
   } catch (error) {
     const safe = error instanceof BillingError ? error : new BillingError("BILLING_UNAVAILABLE");
+    if (safe.code !== "BILLING_SIGNATURE") reportError(error, { route: "/api/billing/webhook", errorCode: safe.code });
     // Even permanent mapping failures return 5xx so a corrected configuration
     // can recover via Stripe retry; only invalid signatures return 400.
     return Response.json({ error: safe.message }, { status: safe.code === "BILLING_SIGNATURE" ? 400 : 503 });
   }
 }
+
+export function POST(request: Request) { return observeRequest(request, () => webhook(request)); }

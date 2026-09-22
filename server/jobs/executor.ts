@@ -1,3 +1,4 @@
+import { reportError } from "../operations/monitoring";
 import { assertActiveUser } from "../privacy/account-state";
 import { canRunBackgroundFeature } from "../entitlements/resources";
 import "server-only";
@@ -127,7 +128,7 @@ export async function executeBackgroundJob<Payload extends object>(
     }, logger);
 
     const allowed = !run.userId || await canRunBackgroundFeature(run.userId, definition.name);
-    const result = !allowed ? { skipped: true, reason: "ENTITLEMENT_REQUIRED" } : await withAIUsageContext({ ...(run.userId ? { userId: run.userId } : {}), requestId: `job:${run.id}`, backgroundJobId: run.id, guardFeature: definition.name, guardProfile: "BACKGROUND" }, () => definition.handler({
+    const result = !allowed ? { skipped: true, reason: "ENTITLEMENT_REQUIRED" } : await withAIUsageContext({ ...(run.userId ? { userId: run.userId } : {}), requestId: `job:${run.id}`, parentRequestId: typeof priorMetadata.requestId === "string" ? priorMetadata.requestId : undefined, backgroundJobId: run.id, guardFeature: definition.name, guardProfile: "BACKGROUND" }, () => definition.handler({
       payload,
       signal: job.signal,
       attempt,
@@ -159,6 +160,7 @@ export async function executeBackgroundJob<Payload extends object>(
     return { id: job.id, status: "completed", output: result };
   } catch (cause) {
     const error = normalizeBackgroundJobError(cause, job.signal);
+    reportError(cause, { backgroundJobId: run.id, jobName: definition.name, requestId: typeof priorMetadata.requestId === "string" ? priorMetadata.requestId : `job:${run.id}`, errorCode: error.code });
     const exhausted = !error.retryable || job.retryCount >= job.retryLimit;
     const durationMs = Date.now() - started;
     // Invalid identity/payload replays and stale workers must not rewrite another

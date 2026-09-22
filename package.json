@@ -33,7 +33,11 @@
     "evals": "node --conditions=react-server --import tsx scripts/run-evals.ts",
     "test:evals": "vitest run tests/ai-evaluation.test.ts",
     "plans:sync": "node --conditions=react-server --import tsx scripts/configure-plans.ts",
-    "billing:configure": "node --conditions=react-server --import tsx scripts/configure-billing.ts"
+    "billing:configure": "node --conditions=react-server --import tsx scripts/configure-billing.ts",
+    "ops:validate": "node --conditions=react-server --import tsx scripts/validate-runtime.ts",
+    "ops:bootstrap": "node --conditions=react-server --import tsx scripts/production-bootstrap.ts",
+    "ops:smoke": "node scripts/deployment-smoke.mjs",
+    "test:deployment": "vitest run tests/production-operations.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -41,6 +45,7 @@
     "@huggingface/transformers": "4.3.0",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
+    "@sentry/node": "10.75.2",
     "@shadcn/react": "^0.3.0",
     "better-auth": "1.7.3",
     "class-variance-authority": "0.7.1",

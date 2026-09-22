@@ -75,12 +75,12 @@ export async function registerBackgroundJobWorkers(
 }
 
 export function observeBackgroundJobBoss(boss: PgBoss): void {
-  boss.on("error", (error) => logBackgroundJob({
+  boss.on("error", () => logBackgroundJob({
     event: "worker-error",
-    status: error.name,
+    status: "worker-failure",
   }));
-  boss.on("warning", (warning) => logBackgroundJob({
+  boss.on("warning", () => logBackgroundJob({
     event: "worker-warning",
-    status: warning.message,
+    status: "queue-warning",
   }));
 }

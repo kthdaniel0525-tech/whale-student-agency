@@ -162,7 +162,7 @@ describe("AI usage at the real provider / mocked HTTP boundary", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     f.write.mockRejectedValue(new Error("SECRET SQL contents"));
     expect((await f.provider.generateText({ messages, usageContext })).text).toBe("PRIVATE answer");
-    expect(log).toHaveBeenCalledWith("AI usage persistence failed", { code: "USAGE_WRITE_FAILED", attemptId: expect.any(String) });
+    expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({ event: "operation-failed", errorCode: "USAGE_WRITE_FAILED", requestId: "request-1" });
     expect(JSON.stringify(log.mock.calls)).not.toContain("SECRET");
   });
   it("persists usage with unknown pricing instead of claiming a zero cost", async () => {

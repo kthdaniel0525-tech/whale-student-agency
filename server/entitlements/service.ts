@@ -9,7 +9,7 @@ import { EntitlementError } from "./errors";
 export type EntitlementClient = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 const statuses = z.enum(["active", "trialing", "past-due", "cancelled", "expired"]);
-const planSchema = z.object({ code: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/), name: z.string().min(1).max(80), description: z.string().max(400), version: z.number().int().positive(), active: z.boolean(), internal: z.boolean(), entitlements: entitlementSchema }).strict();
+export const planSchema = z.object({ code: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/), name: z.string().min(1).max(80), description: z.string().max(400), version: z.number().int().positive(), active: z.boolean(), internal: z.boolean(), entitlements: entitlementSchema }).strict();
 
 /** Internal catalog mutation: never mounted as a frontend endpoint. */
 export async function savePlan(input: PlanDefinition) {
@@ -18,11 +18,13 @@ export async function savePlan(input: PlanDefinition) {
 }
 /** Explicit catalog sync; does not silently overwrite server-managed plans on reads. */
 export async function syncDevelopmentPlans() {
+  if (["staging", "production"].includes(process.env.APP_ENV ?? "") || process.env.NODE_ENV === "production") throw new Error("Development plans cannot be synchronized in deployed environments");
   for (const definition of DEVELOPMENT_PLANS) await savePlan(definition);
 }
 async function planByCode(code: string, tx: EntitlementClient) {
   const existing = await tx.plan.findUnique({ where: { code } });
   if (existing) return existing;
+  if (["staging", "production"].includes(process.env.APP_ENV ?? "") || process.env.NODE_ENV === "production") throw new Error("Run production plan bootstrap before serving requests");
   const definition = DEVELOPMENT_PLANS.find(p => p.code === code);
   if (!definition) throw new Error("Unknown plan configuration");
   return tx.plan.upsert({ where: { code }, create: { ...definition, entitlements: json(definition.entitlements) }, update: {} });
@@ -119,7 +121,8 @@ export async function removeEntitlementOverride(userId: string, key: Entitlement
   });
 }
 export async function publicPlanCatalog() {
-  for (const p of DEVELOPMENT_PLANS) await planByCode(p.code, db());
+  if (!["staging", "production"].includes(process.env.APP_ENV ?? "") && process.env.NODE_ENV !== "production")
+    for (const p of DEVELOPMENT_PLANS) await planByCode(p.code, db());
   const rows = await db().plan.findMany({ where: { active: true, internal: false }, orderBy: { createdAt: "asc" } });
   const groups = { "AI Tutor": "ai.tutor", "Study workflows": "workflow.exam-preparation", "Calendar integration": "integration.calendar", "Drive import": "integration.drive", "Long-term personalization": "personalization.memory", "Career tools": "ai.career" } as const;
   return rows.map(plan => {

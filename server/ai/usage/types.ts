@@ -4,6 +4,7 @@ export const AI_SOURCES = ["rag-document", "rag-query", "memory-index", "memory-
 export type AIUsageContext = {
   guardProfile?: import("../guardrails/config").BudgetProfile;
   backgroundJobId?: string;
+  parentRequestId?: string;
   workflowStepId?: string;
   guardFeature?: string;
   guardWorkflowCalls?: number;

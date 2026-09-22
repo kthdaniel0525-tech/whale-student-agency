@@ -1,4 +1,6 @@
 import "server-only";
+import { operationsConfig } from "../operations/config";
+import { safeFields } from "../operations/monitoring";
 import type { BackgroundJobErrorCode } from "./errors";
 
 export interface BackgroundJobLogEntry {
@@ -31,6 +33,10 @@ export function logBackgroundJob(
   logger[method](JSON.stringify({
     scope: "background-job",
     timestamp: new Date().toISOString(),
-    ...entry,
+    release: operationsConfig().RELEASE_SHA,
+    ...safeFields({ ...entry, backgroundJobId: entry.jobRunId }),
+    jobRunId: entry.jobRunId,
+    ...(entry.userId && /^[A-Za-z0-9_-]{1,100}$/.test(entry.userId) ? { userId: entry.userId } : {}),
+    attempt: entry.attempt,
   }));
 }

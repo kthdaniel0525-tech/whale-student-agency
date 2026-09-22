@@ -1,3 +1,4 @@
+import { reportError } from "../operations/monitoring";
 import { assertEntitlement } from "../entitlements/service";
 import { EntitlementError } from "../entitlements/errors";
 import "server-only";
@@ -131,10 +132,7 @@ export async function processNextDocument(
         leaseExpiresAt: null,
       },
     });
-    console.error("Document processing failed", {
-      documentId: claim.id,
-      type: e instanceof Error ? e.name : "UnknownError",
-    });
+    reportError(e, { jobName: "document-processing", backgroundJobId: claim.id });
   } finally {
     clearInterval(heartbeat);
     clearTimeout(timer);

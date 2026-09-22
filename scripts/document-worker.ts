@@ -1,7 +1,11 @@
 import "dotenv/config";
+import { validateRuntimeConfiguration } from "../server/operations/config";
+import { startHeartbeat } from "../server/operations/heartbeat";
+import { initializeMonitoring, flushMonitoring, logOperation, reportError } from "../server/operations/monitoring";
 import { processNextDocument } from "../server/documents/processor";
 import { cleanupFiles, reconcileStorage } from "../server/documents/cleanup";
 import { db } from "../server/db/client";
+async function main() {
 let stopped = false;
 process.on("SIGTERM", () => {
   stopped = true;
@@ -9,7 +13,10 @@ process.on("SIGTERM", () => {
 process.on("SIGINT", () => {
   stopped = true;
 });
-console.log("Document worker started. Processing private queued documents.");
+validateRuntimeConfiguration();
+initializeMonitoring();
+const stopHeartbeat = await startHeartbeat("documents");
+logOperation("info", "document-worker-started");
 let lastReconcile = 0;
 while (!stopped) {
   process.send?.({ type: "progress" });
@@ -23,9 +30,7 @@ while (!stopped) {
     if (process.argv.includes("--once")) break;
     if (!processed) await new Promise((resolve) => setTimeout(resolve, 2000));
   } catch (e) {
-    console.error("Document worker will retry", {
-      type: e instanceof Error ? e.name : "UnknownError",
-    });
+    reportError(e, { jobName: "document-processing" });
     if (process.argv.includes("--once")) {
       process.exitCode = 1;
       break;
@@ -33,4 +38,12 @@ while (!stopped) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
 }
+await stopHeartbeat();
 await db().$disconnect();
+await flushMonitoring();
+
+}
+try { await main(); } catch (error) {
+  try { reportError(error, { jobName: "document-worker" }); await flushMonitoring(); } catch { console.error(JSON.stringify({ event: "worker-startup-failed" })); }
+  await db().$disconnect().catch(() => {}); process.exit(1);
+}
