@@ -2,7 +2,7 @@
 
 ## Unreleased — target v1.0.0-rc.1
 
-Release candidate status: **RC BLOCKED**. `v1.0.0-rc.1` is reserved but not issued; package version remains `0.1.0`. See the [exact finalization checklist](release-candidate-finalization.md) and [remediation evidence](release-candidate-remediation.md).
+Release candidate status: **RC BLOCKED**. `v1.0.0-rc.1` is reserved but not issued; package version remains `0.1.0`. See the [operational evidence re-evaluation](release-candidate-operational-evidence.md), [exact finalization checklist](release-candidate-finalization.md), and [remediation evidence](release-candidate-remediation.md).
 
 ### Existing core capabilities retained
 

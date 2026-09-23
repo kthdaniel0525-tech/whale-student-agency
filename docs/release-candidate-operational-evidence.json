@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-23",
+  "candidateCommit": "5b9b9605c563bcd01803fb325827ed9e4a6706b4",
+  "targetVersion": "v1.0.0-rc.1",
+  "decision": "RC BLOCKED",
+  "gates": {
+    "hostedStaging": {
+      "status": "FAIL",
+      "reason": "No production-like hosted staging target, credentials, data services, workers, schedules, or monitoring recipients are available. The inspected legacy Sites deployment uses source daf620b69cb044ed8045effece805ac88c6b2fa5 and has no runtime environment entries, D1, or R2 bindings, so it is not candidate evidence."
+    },
+    "realAIQuality": {
+      "status": "FAIL",
+      "reason": "The FULL live/judge attempt completed 52 cases with 36 failed checks. All 19 generated rows failed before model/provider attribution, judging was unavailable, and the strict gate reported FAILED_OBSERVATIONS plus insufficient measured evidence for every core release profile."
+    },
+    "realRAGQuality": {
+      "status": "FAIL",
+      "reason": "No hosted controlled document retrieval and generated-answer faithfulness run exists for this candidate."
+    },
+    "measuredAICost": {
+      "status": "UNAVAILABLE",
+      "reason": "No real candidate AIUsageRecord measurements exist for the six representative scenarios; the attempted live run produced zero attributed cost rows."
+    },
+    "notificationOperations": {
+      "status": "FAIL",
+      "reason": "No hosted scheduler, worker, delivery, duplicate-suppression, snooze/dismiss/action, or timezone receipt exists. In-app remains the only core beta channel."
+    },
+    "backupRestore": {
+      "status": "FAIL",
+      "reason": "No provider backup configuration, encrypted off-host receipt, isolated restore, document-storage recovery evidence, or measured recovery time exists."
+    },
+    "publicPolicyReadiness": {
+      "status": "EXTERNAL BLOCKER",
+      "reason": "Engineering data-flow and deletion evidence exists, but reviewed public Privacy Policy, Terms of Service, and named support/security ownership are missing."
+    }
+  },
+  "versionIssued": false,
+  "packageVersion": "0.1.0"
+}
