@@ -1,0 +1,467 @@
+// ARCHIVED PHASE 1 DESIGN ONLY. Not validated or migrated.
+// Current runtime schema: prisma/schema.prisma. Future features require new reviewed migrations.
+// Phase 1 design. Not migrated or connected to the application.
+// Prisma 6 schema syntax; pin and validate the selected runtime in Phase 2.
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AssignmentStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum QuestionKind {
+  MULTIPLE_CHOICE
+  SHORT_ANSWER
+  LONG_ANSWER
+}
+
+model User {
+  id String @id @default(cuid())
+  authSubject String @unique
+  email String @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  profileRecords Profile?
+  courseRecords Course[]
+  assignmentRecords Assignment[]
+  examRecords Exam[]
+  documentRecords Document[]
+  documentChunkRecords DocumentChunk[]
+  conversationRecords Conversation[]
+  messageRecords Message[]
+  agentRunRecords AgentRun[]
+  quizRecords Quiz[]
+  questionRecords Question[]
+  quizAttemptRecords QuizAttempt[]
+  questionAnswerRecords QuestionAnswer[]
+  learningTopicRecords LearningTopic[]
+  learningProgressRecords LearningProgress[]
+  studyPlanRecords StudyPlan[]
+  studyTaskRecords StudyTask[]
+  userMemoryRecords UserMemory[]
+  recommendationRecords Recommendation[]
+  workflowRunRecords WorkflowRun[]
+  careerProjectRecords CareerProject[]
+}
+
+model Profile {
+  id String @id @default(cuid())
+  userId String @unique
+  displayName String
+  school String?
+  semester String?
+  timezone String @default("UTC")
+  weeklyStudyMinutes Int @default(600)
+  onboardedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Course {
+  id String @id @default(cuid())
+  userId String
+  courseCode String
+  courseName String
+  professor String?
+  semester String
+  description String?
+  color String @default("blue")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignmentRecords Assignment[]
+  examRecords Exam[]
+  documentRecords Document[]
+  documentChunkRecords DocumentChunk[]
+  conversationRecords Conversation[]
+  quizRecords Quiz[]
+  learningTopicRecords LearningTopic[]
+  studyPlanRecords StudyPlan[]
+  recommendationRecords Recommendation[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Assignment {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  description String?
+  dueDate DateTime
+  status AssignmentStatus @default(TODO)
+  priority Int @default(2)
+  estimatedHours Float @default(1)
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@index([userId, dueDate])
+}
+
+model Exam {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  examDate DateTime
+  topics String[]
+  notes String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  studyPlanRecords StudyPlan[]
+  @@unique([id, userId])
+  @@index([userId])
+  @@index([userId, examDate])
+}
+
+model Document {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  storageKey String @unique
+  mimeType String
+  sizeBytes Int
+  status DocumentStatus @default(PENDING)
+  contentHash String
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  documentChunkRecords DocumentChunk[]
+  conversationRecords Conversation[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model DocumentChunk {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  documentId String
+  ordinal Int
+  content String
+  pageNumber Int?
+  metadata Json
+  embeddingModel String
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  document Document @relation(fields: [documentId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([documentId, ordinal])
+}
+
+model Conversation {
+  id String @id @default(cuid())
+  userId String
+  courseId String?
+  documentId String?
+  title String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course? @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  document Document? @relation(fields: [documentId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  messageRecords Message[]
+  agentRunRecords AgentRun[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Message {
+  id String @id @default(cuid())
+  userId String
+  conversationId String
+  role MessageRole
+  content String
+  agentId String?
+  citations Json?
+  status String @default("COMPLETE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  agent Agent? @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Agent {
+  id String @id @default(cuid())
+  key String @unique
+  module String @default("student")
+  version Int @default(1)
+  displayName String
+  enabled Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messageRecords Message[]
+  agentRunRecords AgentRun[]
+}
+
+model AgentRun {
+  id String @id @default(cuid())
+  userId String
+  agentId String
+  conversationId String?
+  status RunStatus @default(PENDING)
+  inputTokens Int @default(0)
+  outputTokens Int @default(0)
+  errorCode String?
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  conversation Conversation? @relation(fields: [conversationId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Quiz {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  title String
+  difficulty String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  questionRecords Question[]
+  quizAttemptRecords QuizAttempt[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model Question {
+  id String @id @default(cuid())
+  userId String
+  quizId String
+  learningTopicId String
+  kind QuestionKind
+  prompt String
+  options Json?
+  answerKey Json
+  explanation String
+  ordinal Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quiz Quiz @relation(fields: [quizId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  learningTopic LearningTopic @relation(fields: [learningTopicId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  questionAnswerRecords QuestionAnswer[]
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([quizId, ordinal])
+}
+
+model QuizAttempt {
+  id String @id @default(cuid())
+  userId String
+  quizId String
+  submittedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quiz Quiz @relation(fields: [quizId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  questionAnswerRecords QuestionAnswer[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model QuestionAnswer {
+  id String @id @default(cuid())
+  userId String
+  quizAttemptId String
+  questionId String
+  answer Json
+  isCorrect Boolean?
+  feedback String?
+  gradedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizAttempt QuizAttempt @relation(fields: [quizAttemptId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  question Question @relation(fields: [questionId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([quizAttemptId, questionId])
+}
+
+model LearningTopic {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  questionRecords Question[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  learningProgressRecords LearningProgress[]
+  studyTaskRecords StudyTask[]
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([userId, courseId, name])
+}
+
+model LearningProgress {
+  id String @id @default(cuid())
+  userId String
+  learningTopicId String
+  attempted Int @default(0)
+  correct Int @default(0)
+  confidence Int @default(0)
+  lastPracticedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  learningTopic LearningTopic @relation(fields: [learningTopicId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([userId, learningTopicId])
+}
+
+model StudyPlan {
+  id String @id @default(cuid())
+  userId String
+  courseId String
+  examId String?
+  title String
+  startsAt DateTime
+  endsAt DateTime
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  exam Exam? @relation(fields: [examId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  studyTaskRecords StudyTask[]
+  @@unique([id, userId])
+  @@index([userId])
+}
+
+model StudyTask {
+  id String @id @default(cuid())
+  userId String
+  studyPlanId String
+  learningTopicId String?
+  title String
+  scheduledAt DateTime
+  durationMinutes Int
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studyPlan StudyPlan @relation(fields: [studyPlanId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  learningTopic LearningTopic? @relation(fields: [learningTopicId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@index([userId, scheduledAt])
+}
+
+model UserMemory {
+  id String @id @default(cuid())
+  userId String
+  key String
+  value String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([userId, key])
+}
+
+model Recommendation {
+  id String @id @default(cuid())
+  userId String
+  courseId String?
+  kind String
+  message String
+  dedupeKey String
+  expiresAt DateTime
+  dismissedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course? @relation(fields: [courseId, userId], references: [id, userId], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([userId, dedupeKey])
+}
+
+model WorkflowRun {
+  id String @id @default(cuid())
+  userId String
+  kind String
+  idempotencyKey String
+  status RunStatus @default(PENDING)
+  step String
+  payload Json
+  attempts Int @default(0)
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([id, userId])
+  @@index([userId])
+  @@unique([userId, idempotencyKey])
+}
+
+model CareerProject {
+  id String @id @default(cuid())
+  userId String
+  title String
+  description String
+  skills String[]
+  resumeBullets String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([id, userId])
+  @@index([userId])
+}

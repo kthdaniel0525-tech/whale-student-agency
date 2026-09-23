@@ -1,0 +1,76 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "rag-generation-induction",
+      "profile": "rag-generation",
+      "request": "Explain the inductive hypothesis using my notes in two bullet points.",
+      "context": {
+        "output": "- Assume P(k) for an arbitrary integer k in the domain.\n- Use that hypothesis to prove P(k+1); check the base case separately.",
+        "sources": [
+          {
+            "id": "math:0",
+            "documentId": "math",
+            "chunkIndex": 0,
+            "content": "The inductive hypothesis assumes P(k) for an arbitrary integer k in the specified domain. Prove P(k+1) from that assumption and establish the base case separately."
+          }
+        ],
+        "citedSourceIds": [
+          "math:0"
+        ],
+        "requestedSourceIds": [
+          "math"
+        ],
+        "requiresGrounding": true,
+        "expected": {
+          "format": "bullets",
+          "requiredTerms": [
+            "P(k)",
+            "base case"
+          ]
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    },
+    {
+      "id": "rag-inductive-hypothesis",
+      "profile": "rag-retrieval",
+      "request": "What is the inductive hypothesis?",
+      "context": {
+        "output": {
+          "chunkIds": [
+            "math:0"
+          ]
+        },
+        "sources": [
+          {
+            "id": "math:0",
+            "documentId": "math",
+            "chunkIndex": 0,
+            "content": "The inductive hypothesis assumes P(k) for an arbitrary integer k in the specified domain. Prove P(k+1) from that assumption and establish the base case separately."
+          }
+        ],
+        "expected": {
+          "relevantChunkIds": [
+            "math:0"
+          ],
+          "k": 5
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

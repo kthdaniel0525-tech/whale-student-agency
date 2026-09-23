@@ -1,0 +1,2 @@
+# Historical inventory replaced by the repository root .env.example.
+# Current phase needs only PostgreSQL and Better Auth configuration.

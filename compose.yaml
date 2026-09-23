@@ -1,0 +1,21 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+    image: student-agency-postgres:17.11-vector-0.8.2
+    ports:
+      - "127.0.0.1:5439:5432"
+    environment:
+      POSTGRES_USER: student
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run npm run setup:local first}
+      POSTGRES_DB: student_agency
+    volumes:
+      - student-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U student -d student_agency"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+volumes:
+  student-postgres:

@@ -1,0 +1,30 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "continuity-correction",
+      "profile": "continuity",
+      "request": "Continue with my corrected course.",
+      "context": {
+        "output": {},
+        "expected": {
+          "requiredTerms": [
+            "MATH 1240"
+          ],
+          "facts": {
+            "correctionPreserved": true,
+            "sourceBacked": true
+          }
+        }
+      },
+      "engine": "continuity",
+      "input": {},
+      "modes": [
+        "FAST_SMOKE",
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

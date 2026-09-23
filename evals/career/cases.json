@@ -1,0 +1,23 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "career-evidence",
+      "profile": "career",
+      "request": "Improve a resume using only my portfolio: one todo app, no verified impact metrics.",
+      "context": {
+        "output": "Describe your todo app features and add tests. Include a repository link and explain your contribution; measure performance before claiming impact.",
+        "expected": {
+          "allowedNumbers": []
+        }
+      },
+      "engine": "fixture",
+      "input": {},
+      "modes": [
+        "STANDARD",
+        "FULL"
+      ]
+    }
+  ]
+}

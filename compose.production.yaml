@@ -1,0 +1,139 @@
+# Each environment uses a separate project, host, secret directory and volumes.
+# No database/app port is public; only the canonical HTTPS reverse proxy binds.
+x-app: &app
+  image: ${APP_IMAGE:?Set immutable APP_IMAGE tag or digest}
+  restart: unless-stopped
+  init: true
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  # Bound native parser/model allocations as well as the JavaScript heap.
+  # Defaults are containment limits, not a claim about supported user capacity.
+  cpus: ${APP_CPU_LIMIT:-2.0}
+  mem_limit: ${APP_MEMORY_LIMIT:-2g}
+  memswap_limit: ${APP_MEMORY_LIMIT:-2g}
+  pids_limit: 256
+  tmpfs: ["/tmp:uid=1000,gid=1000,mode=1770,size=256m", "/app/.next/cache:uid=1000,gid=1000,mode=0700,size=128m"]
+  secrets:
+    - source: runtime_env
+      target: runtime.env
+    - source: production_plans
+      target: plans.json
+  volumes:
+    - documents:/data/documents
+    - models:/data/models
+  depends_on:
+    postgres: { condition: service_healthy }
+  stop_grace_period: 40s
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+
+services:
+  postgres:
+    build: { context: ., dockerfile: docker/postgres.Dockerfile }
+    image: student-agency-postgres:17.11-vector0.8.2
+    restart: unless-stopped
+    cpus: ${DATABASE_CPU_LIMIT:-2.0}
+    mem_limit: ${DATABASE_MEMORY_LIMIT:-2g}
+    memswap_limit: ${DATABASE_MEMORY_LIMIT:-2g}
+    pids_limit: 256
+    environment:
+      POSTGRES_USER: agency_owner
+      POSTGRES_DB: agency
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_owner_password
+    secrets: [db_owner_password, db_app_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-runtime-role.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U agency_owner -d agency"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    shm_size: 256mb
+    stop_grace_period: 60s
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+  volumes-init:
+    <<: *app
+    profiles: [release]
+    user: "0:0"
+    secrets: []
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    restart: "no"
+    entrypoint: [sh, -c, "chown 1000:1000 /data/documents /data/models && chmod 700 /data/documents /data/models"]
+  migrate:
+    <<: *app
+    profiles: [release]
+    restart: "no"
+    secrets:
+      - source: migration_env
+        target: runtime.env
+    command: [migrate]
+  bootstrap:
+    <<: *app
+    profiles: [release]
+    restart: "no"
+    command: [bootstrap]
+  embeddings:
+    <<: *app
+    profiles: [release]
+    restart: "no"
+    command: [embeddings]
+  web:
+    <<: *app
+    command: [web]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 8s
+      start_period: 60s
+      retries: 3
+  jobs:
+    <<: *app
+    command: [jobs]
+    healthcheck:
+      test: [CMD, node, "--env-file=/run/secrets/runtime.env", scripts/worker-health.mjs, jobs]
+      interval: 30s
+      timeout: 8s
+      start_period: 60s
+      retries: 3
+  documents:
+    <<: *app
+    command: [documents]
+    healthcheck:
+      test: [CMD, node, "--env-file=/run/secrets/runtime.env", scripts/worker-health.mjs, documents]
+      interval: 30s
+      timeout: 8s
+      start_period: 90s
+      retries: 3
+  proxy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    cpus: ${PROXY_CPU_LIMIT:-0.5}
+    mem_limit: ${PROXY_MEMORY_LIMIT:-256m}
+    memswap_limit: ${PROXY_MEMORY_LIMIT:-256m}
+    pids_limit: 128
+    ports: ["80:80", "443:443"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set canonical APP_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set certificate contact}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web: { condition: service_healthy }
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+
+secrets:
+  runtime_env: { file: "${DEPLOY_SECRETS_DIR:?Set external secret directory}/runtime.env" }
+  migration_env: { file: "${DEPLOY_SECRETS_DIR}/migration.env" }
+  production_plans: { file: "${DEPLOY_SECRETS_DIR}/plans.json" }
+  db_owner_password: { file: "${DEPLOY_SECRETS_DIR}/db-owner-password" }
+  db_app_password: { file: "${DEPLOY_SECRETS_DIR}/db-app-password" }
+volumes:
+  postgres_data:
+  documents:
+  models:
+  caddy_data:
+  caddy_config:

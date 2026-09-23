@@ -1,0 +1,18 @@
+export const RECOMMENDATION_CONFIG = Object.freeze({
+  examWindowDays: 14,
+  assignmentWindowDays: 7,
+  lectureFreshnessDays: 21,
+  courseInactivityDays: 21,
+  careerWindowDays: 45,
+  dismissalSuppressionDays: 7,
+  completedSuppressionDays: 30,
+  weakMasteryMaximum: 59,
+  weakConfidenceMinimum: 60,
+  diagnosticConfidenceMaximum: 44,
+  diagnosticMasteryMaximum: 69,
+  decliningEvidenceMinimum: 6,
+  repeatedFailureMinimum: 2,
+  maximumActiveRecommendations: 8,
+  defaultTopLimit: 5,
+  maximumTopLimit: 10,
+});

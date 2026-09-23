@@ -1,0 +1,15 @@
+export const REMINDER_CONFIG = Object.freeze({
+  assignmentWindowsDays: [7, 3, 1, 0] as const,
+  examWindowsDays: [14, 7, 3, 1, 0] as const,
+  weakTopicExamWindowDays: 7,
+  workflowWaitingHours: 24,
+  studySessionLookaheadHours: 24,
+  defaultLeadTimeMinutes: 30,
+  minimumLeadTimeMinutes: 5,
+  maximumLeadTimeMinutes: 1_440,
+  missedTaskPriorityMinimum: 70,
+  studyPlanMissedTaskMinimum: 2,
+  maximumActiveReminders: 12,
+  maximumUpcomingReminders: 10,
+  historicalOverdueDays: 30,
+});
