@@ -52,6 +52,10 @@ describe.sequential("account deletion security", () => {
     const conversation = await db().conversation.create({ data: { userId: u.id } });
     await db().conversationMessage.create({ data: { userId: u.id, conversationId: conversation.id, sequence: 1, role: "USER", content: "private message", tokenEstimate: 4 } });
     await db().connectedAccount.create({ data: { userId: u.id, provider: "google", providerAccountId: randomUUID(), scopes: [], accessTokenEncrypted: "ciphertext", refreshTokenEncrypted: "ciphertext" } });
+    await db().betaAccess.create({ data: { userId: u.id, status: "active", cohort: "core" } });
+    await db().productAnalyticsState.create({ data: { userId: u.id } });
+    await db().productEvent.create({ data: { userId: u.id, environment: "test", name: "course_created", dedupeKey: randomUUID(), properties: {} } });
+    await db().productFeedback.create({ data: { userId: u.id, submissionId: randomUUID(), category: "other", message: "Private beta feedback", appVersion: "launch-audit" } });
     await db().verification.create({ data: { id: randomUUID(), identifier: "reset-password:test", value: u.id, expiresAt: new Date(Date.now() + 60000) } });
     const job = await db().jobRun.create({ data: { userId: u.id, queueJobId: randomUUID(), idempotencyKey: randomUUID(), jobName: "test", jobVersion: 1, status: "RUNNING" } });
     await requestAccountDeletion(u.id);
@@ -62,6 +66,7 @@ describe.sequential("account deletion security", () => {
     expect(disconnect).toHaveBeenCalledOnce();
     const where = { userId: u.id };
     expect(await Promise.all([db().course.count({ where }), db().document.count({ where }), db().conversation.count({ where }), db().conversationMessage.count({ where }), db().connectedAccount.count({ where }), db().jobRun.count({ where })])).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(await Promise.all([db().betaAccess.count({ where }), db().productAnalyticsState.count({ where }), db().productEvent.count({ where }), db().productFeedback.count({ where })])).toEqual([0, 0, 0, 0]);
     expect(await db().verification.count({ where: { value: u.id } })).toBe(0);
     await expect(storage.get(key)).rejects.toThrow();
     await expect(assertActiveUser(other.id)).resolves.toBeUndefined();

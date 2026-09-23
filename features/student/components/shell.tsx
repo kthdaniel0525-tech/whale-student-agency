@@ -155,7 +155,7 @@ export function Shell({
             <SunMoon size={19} />
           </Button>
         </header>
-        <main className="student-main">{path !== "/student/feedback" && <FeedbackPrompt />}{children}</main>
+        <div className="student-main">{path !== "/student/feedback" && <FeedbackPrompt />}{children}</div>
       </SidebarInset>
     </SidebarProvider>
   );

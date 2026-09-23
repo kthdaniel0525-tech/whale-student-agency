@@ -3,8 +3,10 @@ import { test, expect } from "@playwright/test";
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 
-test("uses interactive Agent and Workflow results without a second execution system", async ({ page }) => {
+for (const mobile of [false, true]) {
+test(`uses interactive Agent and Workflow results without a second execution system (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
   test.setTimeout(120000);
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
   const email = `interactive-assistant-${randomUUID()}@example.test`;
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const headers = { Origin: "http://localhost:3000" };
@@ -94,8 +96,21 @@ test("uses interactive Agent and Workflow results without a second execution sys
     });
 
     await page.goto("/student/assistant");
+    if (mobile) {
+      const history = page.getByRole("complementary", { name: "Conversation history" });
+      await expect(history).toHaveCount(0);
+      const openHistory = page.getByRole("button", { name: "Open conversation history" });
+      await openHistory.press("Enter");
+      await expect(history).toBeVisible();
+      await expect(openHistory).toHaveAttribute("aria-expanded", "true");
+      await history.getByRole("button", { name: "Close conversation history" }).press("Enter");
+      await expect(history).toHaveCount(0);
+      await expect(openHistory).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByRole("button", { name: "New chat", exact: true })).toHaveCount(1);
+      await page.getByRole("region", { name: "AI conversation" }).getByRole("button", { name: "New chat", exact: true }).press("Enter");
+    }
     const composer = page.getByLabel("Message Academic AI");
-    await page.getByLabel("Preferred AI specialist").selectOption("tutor");
+    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("tutor");
     await composer.fill("Explain induction.");
     await composer.press("Enter");
     await expect(page.getByText("Induction proves a statement by establishing a base and a repeatable step.")).toBeVisible();
@@ -104,12 +119,13 @@ test("uses interactive Agent and Workflow results without a second execution sys
     await expect(page.getByText("Here is another induction example.")).toBeVisible();
 
     await page.getByRole("button", { name: "New chat", exact: true }).last().click();
-    await page.getByLabel("Preferred AI specialist").selectOption("notes");
+    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("notes");
     await composer.fill("Create structured notes on induction.");
     await composer.press("Enter");
     await expect(page.getByRole("region", { name: "Induction review" })).toContainText("P(k) → P(k+1)");
     await page.getByRole("button", { name: "Turn into quiz" }).click();
     const quizRegion = page.getByRole("region", { name: "Induction check quiz" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(quizRegion).toContainText("Question 1 of 2");
     await quizRegion.getByLabel("Base case").check();
     await quizRegion.getByRole("button", { name: "Check answer" }).click();
@@ -123,7 +139,7 @@ test("uses interactive Agent and Workflow results without a second execution sys
     await expect(quizRegion.getByRole("region", { name: "Quiz results" })).toContainText("75%");
 
     await page.getByRole("button", { name: "New chat", exact: true }).last().click();
-    await page.getByLabel("Preferred AI specialist").selectOption("study-planner");
+    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("study-planner");
     await composer.fill("Plan my proof review.");
     await composer.press("Enter");
     const planRegion = page.getByRole("region", { name: "Study plan" });
@@ -139,6 +155,7 @@ test("uses interactive Agent and Workflow results without a second execution sys
     await composer.fill("Start assignment workflow.");
     await composer.press("Enter");
     const workflowRegion = page.getByRole("region", { name: "Assignment Support workflow" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(workflowRegion).toContainText("Waiting for you");
     await workflowRegion.getByRole("textbox", { name: "Add your current draft" }).fill("My assignment draft");
     const continueWorkflow = workflowRegion.getByRole("button", { name: "Continue workflow" });
@@ -148,7 +165,7 @@ test("uses interactive Agent and Workflow results without a second execution sys
     expect(resumeCount).toBe(1);
 
     await page.getByRole("button", { name: "New chat", exact: true }).last().click();
-    await page.getByLabel("Preferred AI specialist").selectOption("academic-manager");
+    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("academic-manager");
     await composer.fill("Review my academic priorities.");
     await composer.press("Enter");
     await expect(page.getByText("Overall status")).toBeVisible();
@@ -156,7 +173,7 @@ test("uses interactive Agent and Workflow results without a second execution sys
     await expect(page.getByRole("button", { name: "Review Induction" })).toBeVisible();
 
     await page.getByRole("button", { name: "New chat", exact: true }).last().click();
-    await page.getByLabel("Preferred AI specialist").selectOption("career");
+    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("career");
     await composer.fill("Review my career preparation.");
     await composer.press("Enter");
     await expect(page.getByText("Clear project documentation")).toBeVisible();
@@ -173,3 +190,4 @@ test("uses interactive Agent and Workflow results without a second execution sys
     await pool.end();
   }
 });
+}

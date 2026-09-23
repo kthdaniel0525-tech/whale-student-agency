@@ -527,8 +527,8 @@
 }
 @media (max-width: 1023px) {
   .assistant-workspace { grid-template-columns: minmax(0, 1fr); }
-  .assistant-history { position: fixed; z-index: 50; top: 0; bottom: 0; left: 0; width: min(310px, 86vw); transform: translateX(-105%); border-right: 1px solid var(--border); box-shadow: 8px 0 30px rgb(23 35 59 / 18%); transition: transform .2s ease; }
-  .assistant-history.is-open { transform: translateX(0); }
+  .assistant-history { position: fixed; z-index: 50; top: 0; bottom: 0; left: 0; width: min(310px, 86vw); transform: translateX(-105%); display: none; border-right: 1px solid var(--border); box-shadow: 8px 0 30px rgb(23 35 59 / 18%); transition: transform .2s ease; }
+  .assistant-history.is-open { transform: translateX(0); display: block; }
 }
 @media (prefers-reduced-motion: reduce) {
   .assistant-history { transition: none; }

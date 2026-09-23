@@ -41,6 +41,16 @@ SCHEMA_COMPATIBILITY_REVIEWED=true node scripts/deploy-release.mjs rollback /etc
 
 Review compatibility with the *current* schema and persisted job payload versions first. Restore the matching feature/provider configuration if needed. A failed release stops and preserves evidence; it does not automatically reverse DB changes. Use a forward-fix migration for schema faults; restore only under an incident plan because restoring loses writes since the snapshot. Use expand → deploy/backfill → contract in a later release for future incompatible changes.
 
+The beta release also changes authorization behavior. The preceding `e1f5239`
+application does not enforce `BetaAccess`, revocations or cohort vetoes. Its schema
+can accept the additive beta tables, but **it is not an approved closed-beta
+rollback target** on that fact alone. Select an image retaining the beta gate, or
+keep ingress and affected workers disabled until an independently verified access
+gate preserves the same approved/revoked/cohort policy. A staging drill must check
+revoked and non-invited accounts, paid-pilot restrictions, privacy opt-out and old
+queued work after rollback, in addition to health and schema compatibility. Record
+the exact image/configuration and evidence before setting the compatibility flag.
+
 ## Database migration audit and recovery
 
 The 35 pre-existing migrations are preserved. They create new tables/constraints/indexes, add nullable or defaulted columns and extend enums. No existing migration drops an academic table/column. Risks on populated databases still need staging rehearsal:
@@ -95,13 +105,15 @@ Configure one Sentry project with staging/production environment filters and not
 
 Use PostgreSQL `pg_stat_activity`, `pg_stat_database`, `pg_locks`, host disk/connection monitoring and provider-native tools; do not enable raw SQL parameter logging. Alert at sustained >75% connection utilization and <20% free disk, tuned after load tests. Request logs capture response-header duration; streaming completion/provider latency comes from existing AI usage. Start by measuring dashboard/course/progress/notification p95 and AI total latency. Provisional non-AI server-response budget: <1 second p95 under expected beta load, to be validated. No measured production baseline or TTFT guarantee exists yet.
 
-Caches retain current ownership keys and private/no-store authenticated responses. Public static hashed assets may be cached; never cache personalized routes, OAuth callbacks, auth or billing responses publicly. Existing auth and AI rate limits use PostgreSQL shared state, not per-process counters. Caddy also excludes HTTP error logs because upstream failures can include raw callback URLs; external readiness probes detect edge outages. No product analytics collector/dashboard was added; request/job/workflow IDs provide safe future instrumentation hooks without recording academic content.
+Caches retain current ownership keys and private/no-store authenticated responses. Public static hashed assets may be cached; never cache personalized routes, OAuth callbacks, auth or billing responses publicly. Existing auth and AI rate limits use PostgreSQL shared state, not per-process counters. Caddy also excludes HTTP error logs because upstream failures can include raw callback URLs; external readiness probes detect edge outages. The later beta release adds opt-in deployment configuration for database-backed behavioral analytics and administrator-only metrics, described in [beta operations](beta-analytics.md). Safe request/job/workflow IDs correlate existing telemetry without recording academic content in product events.
 
 ## Smoke tests and incident actions
 
 `SMOKE_ORIGIN=https://... npm run ops:smoke` checks health, login headers, unauthorized academic/metrics boundaries. Add a secret `SMOKE_COOKIE` from an existing synthetic account to check login/session/dashboard/courses; add the private operations token to require live workers/queues. It makes no LLM calls, charges or user-data writes. `scripts/staging-functional-smoke.mjs` separately tests bounded AI/RAG requests against explicitly supplied synthetic staging fixtures. Google consent requires a human/test-account check; billing checkout uses provider test mode only. Deterministic integration suites cover provider failures, fallback, signed webhooks, queues and ownership without live credentials.
 
 - Bad release: stop promotion, inspect redacted errors by release/request ID, roll back the image only after schema review.
+- Auth outage: check readiness and the database first, then canonical HTTPS origin, secure-cookie behavior, trusted proxy settings, auth-secret consistency across roles and release changes. Reproduce with a synthetic account; do not disable authentication, ownership or beta admission to restore traffic. Roll back only to a policy-compatible image. After recovery verify sign-in, sign-out/session revocation, anonymous denial and rejected revoked/non-invited beta users; an auth-secret rotation intentionally signs existing users out.
+- Database outage: stop rollout and high-volume writers/retries, inspect database health, disk, connection utilization and locks without logging SQL parameters. Restore connectivity or perform the approved backup/failover procedure; do not reset the database or apply an unreviewed destructive migration. Confirm schema/readiness and a synthetic owned read/write, then resume workers gradually and reconcile durable leases, failed jobs and deletion queues. Replay post-backup deletion requests before reopening ingress after a restore.
 - AI/provider/high-cost incident: set existing `AI_GUARDRAILS_JSON` (`disableAllAI`, `disableBackgroundAI`, `disabledFeatures`), `AI_RELIABILITY_JSON` disabled providers or reviewed catalog `enabled:false`; restart roles, verify no new calls. Preserve quality floors when enabling fallbacks.
 - Integration outage/reconnect: use entitlement flags `integration.calendar/drive/lms:false`, inspect safe sync/error codes, respect retry-after and reconnect through settings. Do not log decrypted credentials.
 - Billing failure: set `BILLING_CHECKOUT_ENABLED=false`, keep signed webhooks/reconciliation available; verify mode/mapping/portal/secret and replay provider events after fixing configuration. Never manually grant plans from unverified payloads.

@@ -289,7 +289,7 @@ export function AssistantWorkspace({
 
   return (
     <div className="assistant-workspace">
-      <aside className={`assistant-history ${historyOpen ? "is-open" : ""}`} aria-label="Conversation history">
+      <aside id="conversation-history" className={`assistant-history ${historyOpen ? "is-open" : ""}`} aria-label="Conversation history">
         <div className="flex items-center justify-between gap-2 px-3 pb-4"><div className="flex items-center gap-2 font-semibold"><History size={18} /> Conversations</div><Button size="icon-sm" variant="ghost" className="lg:hidden" aria-label="Close conversation history" onClick={() => setHistoryOpen(false)}><ChevronLeft /></Button></div>
         <Button className="w-full justify-start" variant="outline" onClick={newConversation}><MessageSquarePlus /> New chat</Button>
         <div className="mt-4 space-y-1 overflow-y-auto">
@@ -300,9 +300,9 @@ export function AssistantWorkspace({
 
       <section className="assistant-chat" aria-label="AI conversation">
         <header className="assistant-chat-header">
-          <Button size="icon-sm" variant="ghost" className="lg:hidden" aria-label="Open conversation history" onClick={() => setHistoryOpen(true)}><PanelLeft /></Button>
+          <Button size="icon-sm" variant="ghost" className="lg:hidden" aria-label="Open conversation history" aria-controls="conversation-history" aria-expanded={historyOpen} onClick={() => setHistoryOpen(true)}><PanelLeft /></Button>
           <div className="min-w-0"><h1 className="truncate text-lg font-semibold">{conversation?.title ?? (course ? course.courseCode : "Academic AI")}</h1><p className="truncate text-xs muted">{course ? `${course.courseCode} ${course.courseName} · ` : ""}{activeName}</p></div>
-          <Button className="ml-auto" size="sm" variant="outline" onClick={newConversation}><MessageSquarePlus /> <span className="hidden sm:inline">New chat</span></Button>
+          <Button className="ml-auto" size="sm" variant="outline" aria-label="New chat" onClick={newConversation}><MessageSquarePlus /> <span className="hidden sm:inline">New chat</span></Button>
         </header>
 
         <div className="assistant-messages" aria-live="polite" aria-busy={busy || loadingConversation}>

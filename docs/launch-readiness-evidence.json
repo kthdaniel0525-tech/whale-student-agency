@@ -1,0 +1,271 @@
+{
+  "auditDate": "2026-09-23",
+  "baseCommit": "1d8911f48f80657167fdc066cf56ef07d49a6113",
+  "decision": "NO-GO",
+  "scope": "Public Student AI Agency V1; local repository, PostgreSQL, Docker and synthetic browser verification. No supplied deployed staging/production target.",
+  "categories": [
+    {
+      "name": "Security",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Ownership, authentication, internal/admin, entitlement and security regressions pass; no unresolved confirmed Critical/High code finding. Inline CSP and deployment isolation remain risks."
+    },
+    {
+      "name": "Privacy",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Data map updated for beta analytics, feedback and Sentry. Canonical deletion now verifies all four beta tables; external retention and production erasure remain unverified."
+    },
+    {
+      "name": "Data Integrity",
+      "status": "PASS",
+      "evidence": "Local regressions cover learning retries, plan completion, refresh/vector atomicity, workflow state, encrypted credentials and subscriptions. Fresh schema, existing-account upgrade and synthetic restore pass."
+    },
+    {
+      "name": "AI Quality",
+      "status": "FAIL",
+      "evidence": "52 offline cases pass, but no generated release evidence or reviewed known-good semantic baseline is available. Real API credentials were not available."
+    },
+    {
+      "name": "RAG",
+      "status": "FAIL",
+      "evidence": "Local isolation, selected documents, refresh and controlled retrieval pass. Source faithfulness and representative retrieval quality have no live release baseline."
+    },
+    {
+      "name": "Agents",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Registration, routing, context ownership, model floors, structured output and persistence pass deterministic/integration checks; actual generated quality is gated above."
+    },
+    {
+      "name": "Workflows",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Five workflow integrations, waits/resumes, persisted artifacts, idempotency and loop budgets pass; external AI is mocked."
+    },
+    {
+      "name": "Billing",
+      "status": "FAIL",
+      "evidence": "Server-owned prices, real SDK webhook signatures, idempotency, cancellation, downgrade and portal contracts pass. No actual Stripe test-mode checkout/portal/reconciliation journey was available; keep paid launch disabled."
+    },
+    {
+      "name": "Integrations",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "OAuth state/PKCE/encryption and Calendar/Drive import-refresh-failure contracts pass. Google consent/provider writes are mocked; no production LMS adapter is registered."
+    },
+    {
+      "name": "Automation",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Job claims, retries, timeout/concurrency, reminder/notification actions, settings and persistence pass. Both local workers heartbeat; deployed workers and persisted schedules need verification."
+    },
+    {
+      "name": "Infrastructure",
+      "status": "FAIL",
+      "evidence": "Production Docker build and 39 migrations are reproducible locally. No deployed target, verified runtime secrets, off-host backups, resource limits or policy-compatible rollback receipt is available."
+    },
+    {
+      "name": "Monitoring",
+      "status": "FAIL",
+      "evidence": "Redaction, health, readiness and protected metrics pass. External uptime probes, real Sentry delivery and responsible alert recipients are not verified."
+    },
+    {
+      "name": "Performance",
+      "status": "FAIL",
+      "evidence": "No production/staging latency or concurrency measurement. TTFT is not persisted. Local test durations are not user latency or capacity estimates."
+    },
+    {
+      "name": "UX",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "First-time onboarding, empty workspaces, forms and key dialogs pass. Duplicate main landmarks and inaccessible mobile New chat/history controls were fixed."
+    },
+    {
+      "name": "Mobile",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "390px Chromium onboarding, dashboard, course, assistant, quiz, workflow resume, progress and billing/plans pass. Real-device Safari and manual screen-reader review were not performed."
+    },
+    {
+      "name": "Support",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Private in-product feedback is available. Public Terms/Privacy/dedicated contact pages were not found; published policies and an accountable account/billing support process need business review."
+    },
+    {
+      "name": "Beta",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Admission/cohort/revocation, analytics opt-out, safe events and feedback tests pass. No non-fixture activated beta cohort/events/feedback were observed locally; no real beta success or issue-free claim is possible."
+    }
+  ],
+  "blockers": [
+    {
+      "id": "B1",
+      "title": "Core AI and RAG release evidence",
+      "action": "Provision a synthetic staging AI configuration; run generated/judged Tutor, Notes, Quiz, grading, Planner, Manager, Career and workflow evaluations plus representative retrieval/faithfulness checks against a reviewed compatible baseline. Complete critical AI journeys without developer repairs. Preserve existing quality floors and thresholds."
+    },
+    {
+      "id": "B2",
+      "title": "A verified deployment and capacity boundary",
+      "action": "Provision the actual staging/production host, HTTPS origin, secrets, database roles/pools, private durable storage and OS/container limits. Run authenticated smoke, core journeys, worker/schedule checks and representative latency/concurrency measurements. Object storage/signed URLs are not implemented; explicitly accept the persistent-volume topology with private server downloads or treat object storage as an unmet requirement."
+    },
+    {
+      "id": "B3",
+      "title": "Monitoring that reaches an operator",
+      "action": "Configure the external readiness probe, protected metrics collection, Sentry/redacted logs and recipients; trigger and receive application, worker and database alerts in the target environment."
+    },
+    {
+      "id": "B4",
+      "title": "Proven recovery with unchanged authorization",
+      "action": "Produce encrypted off-host database/document backup receipts with retention and latest success; restore and time them in isolation. Approve and drill an exact rollback image that retains beta revocation/cohort controls. e1f5239 lacks these checks and is not an approved beta rollback target."
+    },
+    {
+      "id": "B5",
+      "title": "Public launch policy and support decision",
+      "action": "Publish business/legal-reviewed Terms and Privacy information for the actual processors/retention, and establish who handles account/feedback issues. For paid launch, additionally verify actual Stripe test checkout, mapped prices, signed webhooks, portal, cancellation/downgrade and billing support before enabling checkout."
+    }
+  ],
+  "journeys": [
+    {
+      "name": "A \u2014 New student",
+      "boundary": "Local UI + service integration",
+      "result": "UI signup/onboarding/course/exam/upload/processing tested; Tutor \u2192 grading \u2192 learning \u2192 plan integration passes with external AI mocked. No single live-model, zero-intervention staging journey."
+    },
+    {
+      "name": "B \u2014 Exam preparation",
+      "boundary": "Local workflow + UI",
+      "result": "Dashboard/deep links, exam workflow, persisted plan/quiz, answers and learning state pass in split tests. Live-model staging journey pending."
+    },
+    {
+      "name": "C \u2014 Lecture study",
+      "boundary": "Local workflow + UI",
+      "result": "Real PDF/local RAG and Notes/Tutor/Quiz wait-resume integration pass; AI outputs use fixtures."
+    },
+    {
+      "name": "D \u2014 Weak topic recovery",
+      "boundary": "Local workflow + UI",
+      "result": "Diagnostic/recovery, mastery-confidence refresh and loop limits pass; mobile progress links tested."
+    },
+    {
+      "name": "E \u2014 Assignment support",
+      "boundary": "Local workflow + UI",
+      "result": "Draft wait/review/resume persistence and desktop/mobile controls pass with mocked model responses."
+    },
+    {
+      "name": "F \u2014 Career",
+      "boundary": "Local services + UI",
+      "result": "Profile/project evidence, skill-gap/resume/plan controls pass; real generated claim quality pending."
+    },
+    {
+      "name": "G \u2014 Automation",
+      "boundary": "Local jobs + UI",
+      "result": "Recommendation/reminder/notification state, actions, quiet hours, stale links and cross-session settings pass; deployed schedules unverified."
+    },
+    {
+      "name": "H \u2014 Calendar",
+      "boundary": "Provider-mocked integration + mobile UI",
+      "result": "State/consent, free-busy conflict constraints and explicit event writes pass. Actual Google consent, project quotas and provider calendar write unverified."
+    },
+    {
+      "name": "I \u2014 Drive",
+      "boundary": "Provider-mocked integration + UI",
+      "result": "Incremental consent, selective import, processing and refresh/version safety pass. Actual remote file change \u2192 fresh live Tutor answer unverified."
+    },
+    {
+      "name": "J \u2014 Billing",
+      "boundary": "Provider-mocked service integration",
+      "result": "Actual SDK signature validation and persisted entitlement/cancellation/downgrade behavior pass. Real provider checkout/webhook/portal end-to-end journey not run."
+    }
+  ],
+  "verification": {
+    "unitAndIntegration": {
+      "files": 69,
+      "passed": 1724,
+      "failed": 0,
+      "log": "/private/tmp/launch-audit-tests.log"
+    },
+    "browser": {
+      "distinctCasesPassed": 21,
+      "execution": "Rate-respecting batches; not one green monolithic run",
+      "externalProviders": "Mocked",
+      "logs": [
+        "/private/tmp/launch-audit-browser-batch-initial.log",
+        "/private/tmp/launch-audit-browser-isolated.log",
+        "/private/tmp/launch-audit-mobile.log",
+        "/private/tmp/launch-audit-interactive-final.log"
+      ]
+    },
+    "offlineEvaluation": {
+      "mode": "FULL",
+      "cases": 52,
+      "failed": 0,
+      "generatedCases": 0,
+      "baselineComparison": "Not available",
+      "log": "/private/tmp/launch-audit-evals.json"
+    },
+    "typescript": {
+      "status": "PASS",
+      "log": "/private/tmp/launch-audit-typescript-final.log"
+    },
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 4,
+      "log": "/private/tmp/launch-audit-lint-final.log"
+    },
+    "dependencyAudit": {
+      "vulnerabilities": 0,
+      "log": "/private/tmp/launch-audit-dependencies.json"
+    },
+    "freshMigrations": {
+      "tables": 71,
+      "migrations": 39,
+      "pgvector": "0.8.2",
+      "log": "/private/tmp/launch-audit-migration.log"
+    },
+    "existingAccountUpgrade": {
+      "scope": "synthetic pre-beta existing-account upgrade",
+      "fromMigrations": 38,
+      "toMigrations": 39,
+      "appliedMigration": "20260923010000_beta_product_analytics",
+      "userCourseExamPreserved": true,
+      "automaticBetaGrants": false
+    },
+    "localSyntheticRestore": {
+      "scope": "local synthetic logical restore; not production backup evidence",
+      "schemaRestored": true,
+      "ownershipPreserved": true,
+      "vectorDimensions": 384,
+      "fileChecksumPreserved": true,
+      "deletionReplay": true,
+      "elapsedMs": 1552
+    },
+    "localSmoke": {
+      "passed": 6,
+      "authenticated": false,
+      "workers": true
+    },
+    "postFixFocused": {
+      "files": 6,
+      "passed": 93,
+      "failed": 0,
+      "log": "/private/tmp/launch-audit-final-focused.log"
+    },
+    "productionBuild": {
+      "status": "PASS",
+      "image": "student-agency-launch-audit:final",
+      "manifestListDigest": "sha256:372542d0d56016fac3149ee9f986ba05b412b3745be5e3e28d706ab2652c5c6d",
+      "log": "/private/tmp/launch-audit-build-final.log",
+      "source": "1d8911f plus final audited application accessibility fixes; documentation added afterward"
+    },
+    "compiledPDFSmoke": {
+      "status": "PASS",
+      "network": "none",
+      "containerMemoryLimit": "2g",
+      "containerCPUQuota": 2,
+      "log": "/private/tmp/launch-audit-pdf-final.log",
+      "note": "Limits apply to the smoke container only, not the production Compose deployment."
+    }
+  },
+  "productionMeasurements": {
+    "latency": null,
+    "firstTokenLatency": null,
+    "costPerActiveUser": null,
+    "costPerAgent": null,
+    "costPerWorkflow": null,
+    "heavyUserCost": null,
+    "safePublicCapacity": null
+  },
+  "evidenceRetention": "This summary is durable; raw local logs are temporary and are not uploaded. No secret values or personal content are included."
+}

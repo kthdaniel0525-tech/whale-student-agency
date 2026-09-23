@@ -154,7 +154,7 @@ export function CourseWorkspace({ initial, initialTab = "overview" }: { initial:
       {tabs.map((tab) => <button id={`course-tab-${tab}`} key={tab} role="tab" aria-selected={active === tab} aria-controls={`course-panel-${tab}`} tabIndex={active === tab ? 0 : -1} onClick={() => chooseTab(tab)}>{tabLabels[tab]}{tab in tabCounts && <span>{tabCounts[tab as keyof typeof tabCounts]}</span>}</button>)}
     </nav>
 
-    {active === "overview" && <main id="course-panel-overview" role="tabpanel" aria-labelledby="course-tab-overview" className="course-workspace-panel">
+    {active === "overview" && <section id="course-panel-overview" role="tabpanel" aria-labelledby="course-tab-overview" className="course-workspace-panel">
       <section className="course-overview-hero">
         <div><p className="eyebrow">Course overview</p><h2>{course.description || "Your focused workspace for this course."}</h2><div className="course-overview-signals">
           <span><CalendarClock /> {data.overview.nextAssignment ? `${data.overview.nextAssignment.title} · ${countdown(data.overview.nextAssignment.dueDate)}` : "No open assignment"}</span>
@@ -177,7 +177,7 @@ export function CourseWorkspace({ initial, initialTab = "overview" }: { initial:
         <section className="course-workspace-card-panel"><div className="course-panel-heading"><h2>Learning focus</h2><TrendingUp /></div>{data.overview.topWeakTopic ? <><TopicRow courseId={course.id} topic={data.overview.topWeakTopic} /><Button variant="ghost" size="sm" onClick={() => chooseTab("progress")}>View all progress <ArrowRight /></Button></> : <div className="course-inline-empty"><p>No learning data yet.</p><Button asChild size="sm"><Link href={assistantUrl(`Create a diagnostic quiz for ${course.courseCode}.`, { type: "agent", id: "quiz" }, courseValues)}>Take quiz</Link></Button></div>}</section>
         <section className="course-workspace-card-panel"><div className="course-panel-heading"><h2>Study plan</h2><CheckCircle2 /></div>{data.studyPlan ? <div className="course-plan-summary"><h3>{data.studyPlan.title}</h3><strong>{data.studyPlan.completedTasks} / {data.studyPlan.completedTasks + data.studyPlan.remainingTasks} tasks complete</strong>{data.studyPlan.completionPercentage !== null && <Progress value={data.studyPlan.completionPercentage} aria-label={`${data.studyPlan.title} ${data.studyPlan.completionPercentage}% complete`} />}{data.studyPlan.nextTask && <p>Next: {data.studyPlan.nextTask.title} · {data.studyPlan.nextTask.durationMinutes} min</p>}<Button asChild size="sm"><Link href="/student/study-plan">View plan</Link></Button></div> : <div className="course-inline-empty"><p>No active course study plan.</p><Button asChild size="sm"><Link href={assistantUrl(`Create a study plan for ${course.courseCode}.`, { type: "agent", id: "study-planner" }, courseValues)}>Create plan</Link></Button></div>}</section>
       </div>
-    </main>}
+    </section>}
 
     {active === "assignments" && <section id="course-panel-assignments" role="tabpanel" aria-labelledby="course-tab-assignments" className="course-workspace-panel course-workspace-card-panel">
       <div className="course-panel-heading"><div><p className="eyebrow">Coursework</p><h2>Assignments</h2></div><EntityForm kind="assignment" courseId={course.id} /></div>
