@@ -109,8 +109,10 @@ test(`uses interactive Agent and Workflow results without a second execution sys
       await expect(page.getByRole("button", { name: "New chat", exact: true })).toHaveCount(1);
       await page.getByRole("region", { name: "AI conversation" }).getByRole("button", { name: "New chat", exact: true }).press("Enter");
     }
-    const composer = page.getByLabel("Message Academic AI");
-    await page.getByRole("region", { name: "AI conversation" }).getByLabel("Preferred AI specialist").selectOption("tutor");
+    const conversation = page.getByRole("region", { name: "AI conversation" });
+    const composer = conversation.locator('textarea[aria-label="Message Academic AI"]:visible');
+    await expect(composer).toHaveCount(1);
+    await conversation.getByLabel("Preferred AI specialist").selectOption("tutor");
     await composer.fill("Explain induction.");
     await composer.press("Enter");
     await expect(page.getByText("Induction proves a statement by establishing a base and a repeatable step.")).toBeVisible();

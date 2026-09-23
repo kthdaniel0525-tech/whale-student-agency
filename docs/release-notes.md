@@ -1,8 +1,8 @@
 # Technical release notes
 
-## Unreleased — launch blocker remediation
+## Unreleased — target v1.0.0-rc.1
 
-Release candidate status: **not issued**. Current engineering decision: **NO-GO**; package version remains `0.1.0`. See [remediation and remaining gates](release-candidate-remediation.md).
+Release candidate status: **RC BLOCKED**. `v1.0.0-rc.1` is reserved but not issued; package version remains `0.1.0`. See the [exact finalization checklist](release-candidate-finalization.md) and [remediation evidence](release-candidate-remediation.md).
 
 ### Existing core capabilities retained
 
