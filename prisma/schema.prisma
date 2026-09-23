@@ -181,6 +181,10 @@ model User {
   entitlementOverrides UserEntitlementOverride[]
   entitlementEvents EntitlementEvent[]
   usageAdmissions EntitlementUsageAdmission[]
+  betaAccess BetaAccess?
+  analyticsState ProductAnalyticsState?
+  productEvents ProductEvent[]
+  productFeedback ProductFeedback[]
 
   externalCourseLinks ExternalCourseLink[]
   externalAssignmentLinks ExternalAssignmentLink[]
@@ -1741,4 +1745,62 @@ model BillingRetentionRecord {
   deletedAt DateTime @default(now())
   retainUntil DateTime
   @@index([retainUntil])
+}
+
+// Private V1 beta state; subscription plans never grant internal authorization.
+model BetaAccess {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status String @default("invited")
+  cohort String @default("core")
+  source String @default("operator")
+  internal Boolean @default(false)
+  invitedAt DateTime @default(now())
+  activatedAt DateTime?
+  updatedAt DateTime @updatedAt
+  @@index([status, cohort])
+}
+model ProductAnalyticsState {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  anonymousId String @unique @default(uuid())
+  optedOut Boolean @default(false)
+  feedbackPromptDismissedAt DateTime?
+}
+model ProductEvent {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  environment String
+  name String
+  dedupeKey String @unique
+  cohort String?
+  properties Json
+  createdAt DateTime @default(now())
+  @@index([environment, name, createdAt])
+  @@index([userId, environment, createdAt])
+  @@index([createdAt])
+}
+// Feedback text is private application content, never analytics properties.
+model ProductFeedback {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissionId String
+  category String
+  rating Int?
+  message String
+  page String?
+  feature String?
+  requestId String?
+  workflowRunId String?
+  appVersion String
+  survey Json?
+  status String @default("new")
+  severity String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, submissionId])
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
 }

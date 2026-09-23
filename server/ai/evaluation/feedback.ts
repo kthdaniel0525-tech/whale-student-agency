@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../../product-analytics/service";
 import "server-only";
 import { z } from "zod";
 import { db } from "../../db/client";
@@ -24,5 +25,6 @@ export async function submitFeedback(userId: string, messageId: string, raw: unk
   await saveEvaluation({ links: { userId, messageId, feedbackId: saved.id, ...(usage ? { usageRecordId: usage.id } : {}) }, versions: { datasetVersion: "user-feedback-v1", promptVersion: usage?.promptVersion ?? "unknown", routingVersion: usage?.routingVersion ?? "unknown", contextVersion: usage?.contextVersion ?? "unknown" }, result: { profile, evaluationType: "user-feedback", evaluatorVersion: "satisfaction-v1", score: Number(input.rating === 1), passed: null, dimensions: {}, failures: [], unmeasured: [], metrics: { positive: Number(input.rating === 1) }, checks: [] } });
   // Feedback is satisfaction evidence, never automatically a correctness label.
   if (input.rating === -1) await import("./sampling").then(m => m.maybeSampleResponse(userId, messageId, true)).catch(() => undefined);
+  trackProductEvent(userId, "ai_feedback_submitted", { rating: saved.rating, ...(saved.agentId ? { agentId: saved.agentId } : {}), ...(saved.workflowId ? { workflowId: saved.workflowId } : {}), ...(z.string().uuid().safeParse(saved.requestId).success ? { requestId: saved.requestId } : {}) }, `${saved.id}:${saved.rating}`);
   return { rating: saved.rating, reasonCode: saved.reasonCode, comment: saved.comment };
 }

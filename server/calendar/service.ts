@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import "server-only";
 import { recordIntegrationMetric } from "../integrations/metrics";
 import { randomUUID } from "node:crypto";
@@ -162,6 +163,7 @@ export function createGoogleCalendarService(options: {
             });
             for (const result of results)
                 await db().externalEventLink.updateMany({ where: { userId, connectedAccountId: accountId, externalCalendarId: result.selection.externalCalendarId, externalEventId: { in: result.missingIds }, status: "LINKED", updatedAt: { lte: timestamp } }, data: { status: "MISSING" } });
+            trackProductEvent(userId, "calendar_sync_success");
             recordIntegrationMetric("syncSuccesses", performance.now() - started);
             return { synced: true };
         }

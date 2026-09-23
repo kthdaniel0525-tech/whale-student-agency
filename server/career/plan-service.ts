@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import "server-only";
 import { auth } from "../auth/config";
 import { db } from "../db/client";
@@ -18,7 +19,7 @@ const category = (value: ScheduledCareerTask["category"]) => value.toUpperCase()
 export async function persistCareerPlan(userId: string, state: CareerPreparationState, summary: string, tasks: readonly ScheduledCareerTask[]) {
   try {
     const totalPlannedMinutes = tasks.reduce((sum, task) => sum + task.durationMinutes, 0);
-    return await db().careerPlan.create({
+    const plan = await db().careerPlan.create({
       data: {
         userId, targetRole: state.targetRole, targetIndustry: state.targetIndustry,
         startDate: new Date(`${state.timeline.startDate}T00:00:00Z`), targetDate: new Date(`${state.timeline.targetDate}T00:00:00Z`),
@@ -29,6 +30,8 @@ export async function persistCareerPlan(userId: string, state: CareerPreparation
       },
       include: { tasks: { orderBy: [{ weekNumber: "asc" }, { priority: "desc" }, { id: "asc" }] } },
     });
+    trackProductEvent(userId, "career_plan_created", {}, plan.id);
+    return plan;
   } catch {
     throw new CareerPlanError("STORAGE_FAILURE");
   }
@@ -61,6 +64,7 @@ export class CareerPlanService {
         data: { status: values[status] },
       });
       if (!result.count) throw new NotFoundError();
+      if (status === "completed") trackProductEvent(session.user.id, "career_task_completed", {}, id);
       return db().careerTask.findFirstOrThrow({ where: { id, userId: session.user.id } });
     } catch (error) {
       if (error instanceof CareerPlanError || error instanceof NotFoundError) throw error;

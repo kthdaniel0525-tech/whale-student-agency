@@ -1,3 +1,5 @@
+import { trackProductEvent } from "../../product-analytics/service";
+import { captureUsageContext } from "../../ai/usage/context";
 import "server-only";
 import type { CareerContext } from "../../career/types";
 import { AIError } from "../../ai/errors";
@@ -65,6 +67,8 @@ export const executeCareer: AgentExecutionHandler = async (input, headers, execu
     guidanceScope: "general-role-guidance",
     limitations: [...career.limitations, "Based on self-reported evidence and general role guidance; no live job requirements were verified."],
   };
+  const usage = captureUsageContext();
+  if (data.resumeBullets.length && usage.userId) trackProductEvent(usage.userId, "resume_improvement_used", {}, usage.requestId);
   const sections = [data.summary];
   const add = (label: string, items: string[]) => { if (items.length) sections.push(`${label}:\n${items.map((item) => `- ${item}`).join("\n")}`); };
   add("Strengths", data.strengths); add("Evidence gaps", data.gaps);

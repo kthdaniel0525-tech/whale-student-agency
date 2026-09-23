@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -210,6 +211,8 @@ export async function importDriveFile(input: DriveResource & {
                 guard: lockClaim, complete: tx => complete(tx, targetId), check, provider: options.provider,
             });
         }
+        trackProductEvent(userId, "drive_import_success", {}, `${link.id}:${link.requestVersion}`);
+        trackProductEvent(userId, "document_uploaded", {}, documentId);
         driveEvent(link.documentId ? "REFRESH_SUCCESS" : "IMPORT_SUCCESS", link.id);
         // An access-health write must not turn an already-committed import into a failed replacement.
         await updateIntegrationSyncState(userId, input.connectedAccountId, "drive-read", { status: "COMPLETED" }).catch(() => { });

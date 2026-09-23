@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import { assertIntegrationAccess, assertResourceCreation } from "../entitlements/resources";
 import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -83,6 +84,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
         targetAccountId: target?.id, redirectPath: input.redirectPath, expiresAt: new Date(timestamp.getTime() + OAUTH_SESSION_TTL_MS), createdAt: timestamp } });
       return { scopes, ...(target?.email ? { loginHint: target.email } : {}) };
     });
+    trackProductEvent(identity.userId, "integration_connect_started", { provider: provider.id }, id);
     return { authorizationUrl: provider.getAuthorizationUrl({ state, codeChallenge: hash(verifier), redirectUri: callbackUri(provider.id), ...result }) };
   });
 
@@ -140,6 +142,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
       await tx.oAuthConnectionSession.update({ where: { id: session.id }, data: { completedAt: now(), resultAccountId: id } });
       return { account, reconnected: Boolean(current) };
     }, transactionOptions);
+    trackProductEvent(identity.userId, "integration_connected", { provider: provider.id }, claim.row.id);
     emitIntegrationEvent(persisted.reconnected ? "INTEGRATION_RECONNECTED" : "INTEGRATION_CONNECTED", { provider: provider.id, connectedAccountId: persisted.account.id });
     return { account: view(persisted.account), redirectPath: claim.row.redirectPath, replayed: false };
   });
@@ -236,6 +239,7 @@ export function createIntegrationService(options: { registry?: IntegrationRegist
         }
       } catch (error) { revocationErrorCode = safeIntegrationError(error).code; }
       await db().connectedAccount.updateMany({ where: { id, userId, status: "REVOKED", credentialVersion: result.account.credentialVersion + 1 }, data: { revocationErrorCode, revocationPendingUntil: null } });
+      trackProductEvent(userId, "integration_disconnected", { provider: registry.get(result.account.provider).id }, `${id}:${result.account.credentialVersion}`);
       emitIntegrationEvent("INTEGRATION_DISCONNECTED", { provider: registry.get(result.account.provider).id, connectedAccountId: id, ...(revocationErrorCode ? { errorCode: revocationErrorCode } : {}) });
     }
     return view(await owned(userId, id, db(), true));

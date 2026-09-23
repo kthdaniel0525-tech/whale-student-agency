@@ -37,7 +37,9 @@
     "ops:validate": "node --conditions=react-server --import tsx scripts/validate-runtime.ts",
     "ops:bootstrap": "node --conditions=react-server --import tsx scripts/production-bootstrap.ts",
     "ops:smoke": "node scripts/deployment-smoke.mjs",
-    "test:deployment": "vitest run tests/production-operations.test.ts"
+    "test:deployment": "vitest run tests/production-operations.test.ts",
+    "beta:access": "node --conditions=react-server --import tsx scripts/configure-beta.ts",
+    "test:beta": "vitest run tests/beta-analytics.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

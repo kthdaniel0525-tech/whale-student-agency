@@ -1,3 +1,4 @@
+import { trackProductEvent, recommendationProperties } from "../product-analytics/service";
 import { hasEntitlement } from "../entitlements/service";
 import "server-only";
 import { auth } from "../auth/config";
@@ -428,17 +429,21 @@ async function ownedRecommendation(userId: string, id: string) {
 export async function dismissRecommendation(userId: string, id: string, now = new Date()): Promise<RecommendationRecord> {
   const row = await ownedRecommendation(userId, id);
   if (row.status !== "ACTIVE") throw new RecommendationError("NOT_FOUND");
-  return publicRecommendation(await db().recommendation.update({
+  const saved = await db().recommendation.update({
     where: { id: row.id }, data: { status: "DISMISSED", dismissedAt: now, activeKey: null },
-  }));
+  });
+  trackProductEvent(userId, "recommendation_dismissed", recommendationProperties(userId, id), id);
+  return publicRecommendation(saved);
 }
 
 export async function completeRecommendation(userId: string, id: string, now = new Date()): Promise<RecommendationRecord> {
   const row = await ownedRecommendation(userId, id);
   if (row.status !== "ACTIVE") throw new RecommendationError("NOT_FOUND");
-  return publicRecommendation(await db().recommendation.update({
+  const saved = await db().recommendation.update({
     where: { id: row.id }, data: { status: "COMPLETED", completedAt: now, activeKey: null },
-  }));
+  });
+  trackProductEvent(userId, "recommended_action_completed", recommendationProperties(userId, id), id);
+  return publicRecommendation(saved);
 }
 
 async function referenceExists(userId: string, kind: string, id: string): Promise<boolean> {
@@ -475,9 +480,11 @@ export async function startRecommendedAction(userId: string, id: string): Promis
   if (!(await Promise.all(references.map(([kind, value]) => referenceExists(userId, kind, value)))).every(Boolean))
     throw new RecommendationError("INVALID_TARGET");
   if (row.recommendedWorkflowId && WORKFLOW_IDS.includes(row.recommendedWorkflowId as typeof WORKFLOW_IDS[number])) {
+    trackProductEvent(userId, "recommendation_clicked", recommendationProperties(userId, row.id), row.id);
     return { recommendationId: row.id, target: { type: "workflow", id: row.recommendedWorkflowId as typeof WORKFLOW_IDS[number] }, payload };
   }
   if (row.recommendedAgentId && allowedAgents.has(row.recommendedAgentId as RecommendationAgentId)) {
+    trackProductEvent(userId, "recommendation_clicked", recommendationProperties(userId, row.id), row.id);
     return { recommendationId: row.id, target: { type: "agent", id: row.recommendedAgentId as RecommendationAgentId }, payload };
   }
   throw new RecommendationError("INVALID_TARGET");

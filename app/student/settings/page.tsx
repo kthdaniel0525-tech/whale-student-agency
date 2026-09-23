@@ -30,6 +30,7 @@ export default async function Settings({ searchParams }: { searchParams: Promise
         </div>
       </div>
       <PlanAccessSummary />
+      <section className="panel max-w-4xl mb-6"><h2>Help &amp; feedback</h2><p className="my-3">Report a problem, share an idea, or change product usage tracking.</p><Button asChild variant="outline"><Link href="/student/feedback">Send feedback &amp; manage privacy</Link></Button></section>
       <section className="panel max-w-4xl">
         <h2 className="mb-6">Academic profile</h2>
         <ProfileForm

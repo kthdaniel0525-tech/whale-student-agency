@@ -1,3 +1,4 @@
+import { betaFeatureFlags } from "../beta/access";
 import { AccountUnavailableError } from "../privacy/account-state";
 import "server-only";
 import { z } from "zod";
@@ -68,7 +69,10 @@ export async function getUserEntitlements(userId: string, tx: EntitlementClient 
     const value = parseEntitlement(key, override.value);
     Object.assign(values, { [key]: value });
   }
-  const flags = featureFlags();
+  const cohortFlags = await betaFeatureFlags(userId, tx);
+  const flags = { ...cohortFlags, ...featureFlags() };
+  // Global switches only veto; a global true must not undo a cohort veto.
+  for (const [key, value] of Object.entries(cohortFlags)) if (value === false) flags[key as Capability] = false;
   for (const key of CAPABILITIES) if (flags[key] === false) values[key] = false;
   // An expired subscription never creates a fresh bespoke usage window.
   return { userId, plan, subscription, values, flags, period: usagePeriod(effective ? subscription : { currentPeriodStart: null, currentPeriodEnd: null }, now) };

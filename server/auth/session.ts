@@ -1,3 +1,4 @@
+import { betaAccess, BetaAccessError } from "../beta/access";
 import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -9,6 +10,7 @@ export async function requirePageUser(onboarded = true) {
   if (!session) redirect("/sign-in");
   try { await assertActiveUser(session.user.id); }
   catch (error) { if (error instanceof AccountUnavailableError) redirect("/sign-in"); throw error; }
+  try { await betaAccess(session.user.id); } catch (error) { if (error instanceof BetaAccessError) redirect("/beta"); throw error; }
   const profile = await db().profile.findUnique({
     where: { userId: session.user.id },
   });

@@ -1,3 +1,4 @@
+import { BetaAccessError } from "../beta/access";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { CAPABILITIES, type Capability } from "@/lib/entitlements/types";
@@ -50,5 +51,6 @@ export const JOB_CAPABILITIES: Readonly<Record<string, Capability>> = {
 };
 export async function canRunBackgroundFeature(userId: string, jobName: string) {
   const key = JOB_CAPABILITIES[jobName];
-  return !key || (await getUserEntitlements(userId)).values[key];
+  try { return !key || (await getUserEntitlements(userId)).values[key]; }
+  catch (error) { if (error instanceof BetaAccessError) return false; throw error; }
 }

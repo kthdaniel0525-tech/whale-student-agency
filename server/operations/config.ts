@@ -1,3 +1,5 @@
+import { betaConfig } from "../beta/config";
+import { analyticsConfig } from "../product-analytics/config";
 import "server-only";
 import path from "node:path";
 import { z } from "zod";
@@ -35,7 +37,7 @@ export function signupAllowed(email: string): boolean {
   const config = operationsConfig();
   if (config.SIGNUP_ENABLED === "false") return false;
   const allowlist = config.SIGNUP_EMAIL_ALLOWLIST?.split(",").map(v => v.trim().toLowerCase()).filter(Boolean);
-  return !allowlist?.length || allowlist.includes(email.trim().toLowerCase());
+  return (!betaConfig().enabled && !allowlist?.length) || !!allowlist?.includes(email.trim().toLowerCase());
 }
 
 /** No network requests; builds need no secrets, all runtime roles fail closed. */
@@ -45,7 +47,7 @@ export function validateRuntimeConfiguration() {
   const catalog = getModelCatalog();
   const ai = getAIConfig();
   const guard = getGuardrailConfig();
-  getReliabilityConfig(); featureFlags(); getBackgroundJobConfig();
+  getReliabilityConfig(); featureFlags(); getBackgroundJobConfig(); betaConfig(); analyticsConfig();
   const documents = documentConfig();
   if (!config.deployed) return config;
   const requireValue = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };

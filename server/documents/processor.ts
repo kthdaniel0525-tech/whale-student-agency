@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import { reportError } from "../operations/monitoring";
 import { assertEntitlement } from "../entitlements/service";
 import { EntitlementError } from "../entitlements/errors";
@@ -113,6 +114,8 @@ export async function processNextDocument(
         );
       })(),
     ]);
+    const published = await db().document.findFirst({ where: { id: claim.id, userId: claim.userId, processingStatus: "READY" }, select: { id: true } }).catch(() => null);
+    if (published) trackProductEvent(claim.userId, "document_ready", {}, claim.id);
     await refreshRecommendationsBestEffort(claim.userId);
   } catch (e) {
     await db().document.updateMany({

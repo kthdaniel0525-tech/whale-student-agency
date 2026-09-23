@@ -57,3 +57,5 @@ AI usage: [token tracking, estimated pricing, attribution, aggregation and priva
 ## Production deployment
 
 The persistent container deployment, secret templates, health checks, staging/release pipeline and operational runbook are documented in [Production operations](docs/production-operations.md). Production requires a configured host/domain, separate secrets, monitoring and verified off-host backups; local development is not a deployed environment.
+
+Closed beta access, privacy controls, event definitions and internal review: [Beta analytics runbook](docs/beta-analytics.md).

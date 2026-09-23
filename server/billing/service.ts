@@ -1,3 +1,5 @@
+import { trackProductEvent } from "../product-analytics/service";
+import { assertBetaBilling } from "../beta/access";
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { billingSelection, type BillingSelection, type BillingStatus, type BillingSummary, type PublicPrice } from "@/lib/billing/types";
@@ -37,6 +39,7 @@ export async function getOrCreateBillingCustomer(userId: string, provider: Billi
   });
 }
 export async function createCheckoutSession(userId: string, input: BillingSelection, provider: BillingProvider = billingProvider()) {
+  await assertBetaBilling(userId);
   await assertActiveUser(userId);
   if (!requireBilling().checkoutEnabled) throw new BillingError("BILLING_DISABLED");
   const { price } = await purchasable(input, provider);
@@ -63,6 +66,7 @@ export async function createCheckoutSession(userId: string, input: BillingSelect
       await tx.billingCheckout.update({ where: { id: intent.id }, data: { providerSessionId: session.id } });
       await audit(tx, userId, "checkout_started", { planCode: input.planCode, interval: input.billingInterval });
     });
+    trackProductEvent(userId, "checkout_started", {}, intent.id);
     return { url: session.url };
   });
 }
@@ -75,6 +79,7 @@ export async function createBillingPortalSession(userId: string, provider: Billi
   return { url };
 }
 export async function createPlanChangeSession(userId: string, input: BillingSelection, provider: BillingProvider = billingProvider()) {
+  await assertBetaBilling(userId);
   await assertActiveUser(userId);
   const { price } = await purchasable(input, provider);
   const customer = await db().billingCustomer.findUnique({ where: { userId } });
@@ -136,6 +141,11 @@ async function applySubscription(tx: Tx, userId: string, { s, price }: Snapshot)
   }
   // Entitlement resolution deliberately has no cross-request cache. Updating
   // UserSubscription atomically is the invalidation; overrides are untouched.
+  // Report observed transitions, not a fresh conversion on every reconciliation
+  // (including when analytics is enabled after a subscription already exists).
+  return { subscriptionId: id,
+    started: ["active", "trialing"].includes(s.status) && !["active", "trialing"].includes(owner?.status ?? ""),
+    cancelled: s.status === "cancelled" && owner?.status !== "cancelled" };
 }
 export async function syncSubscriptionFromProvider(id: string, provider: BillingProvider = billingProvider(), expectedUserId?: string) {
   const known = await db().billingSubscription.findUnique({ where: { providerSubscriptionId: id } });
@@ -143,7 +153,11 @@ export async function syncSubscriptionFromProvider(id: string, provider: Billing
   if (!customer || expectedUserId && customer.userId !== expectedUserId) throw new BillingError("BILLING_OWNERSHIP", 403);
   await withBillingLease(customer.userId, async lease => {
     const truth = await snapshots(customer.userId, id, provider);
-    await lease.persist(async tx => { for (const snapshot of truth) await applySubscription(tx, customer.userId, snapshot); });
+    const signals = await lease.persist(async tx => { const changes = []; for (const snapshot of truth) changes.push(await applySubscription(tx, customer.userId, snapshot)); return changes; });
+    for (const signal of signals) if (signal) {
+      if (signal.started) trackProductEvent(customer.userId, "subscription_started", {}, signal.subscriptionId);
+      if (signal.cancelled) trackProductEvent(customer.userId, "subscription_cancelled", {}, signal.subscriptionId);
+    }
   });
 }
 export async function processBillingEvent(event: BillingEvent, provider: BillingProvider) {
@@ -160,11 +174,18 @@ export async function processBillingEvent(event: BillingEvent, provider: Billing
       // Fetch only after acquiring the renewable customer lease, never inside
       // a DB transaction. A lost lease prevents stale snapshots from committing.
       const truth = await snapshots(customer.userId, event.subscriptionId!, provider);
-      await lease.persist(async tx => {
-        for (const snapshot of truth) await applySubscription(tx, customer.userId, snapshot);
+      const signals = await lease.persist(async tx => {
+        const changes = [];
+        for (const snapshot of truth) changes.push(await applySubscription(tx, customer.userId, snapshot));
         if (event.checkoutId && event.type === "checkout.session.completed") await audit(tx, customer.userId, "checkout_completed", {});
         await tx.billingWebhookEvent.update({ where: { id: record.id }, data: { status: "processed", processedAt: new Date(), failureCode: null } });
+        return changes;
       });
+      for (const signal of signals) if (signal) {
+        if (signal.started) trackProductEvent(customer.userId, "subscription_started", {}, signal.subscriptionId);
+        if (signal.cancelled) trackProductEvent(customer.userId, "subscription_cancelled", {}, signal.subscriptionId);
+      }
+      if (event.checkoutId && event.type === "checkout.session.completed") trackProductEvent(customer.userId, "checkout_completed", {}, event.checkoutId);
       return { received: true };
     });
   } catch (error) {

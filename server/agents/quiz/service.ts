@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../../product-analytics/service";
 import { assertEntitlement, hasEntitlement } from "../../entitlements/service";
 import "server-only";
 import { semanticGradingMessages, GRADING_PROMPT_VERSION } from "./grading-prompt";
@@ -514,7 +515,11 @@ export class QuizAgentService {
       // LearningProgress is authoritative; optional adaptation evidence cannot
       // make a successfully graded answer fail.
     }
-    if (recorded.completed) await refreshRecommendationsBestEffort(userId);
+    trackProductEvent(userId, "quiz_started", {}, recorded.quizAttemptId);
+    if (recorded.completed) {
+      trackProductEvent(userId, "quiz_completed", {}, recorded.quizAttemptId);
+      await refreshRecommendationsBestEffort(userId);
+    }
     return {
       quizId: parsed.data.quizId,
       questionId: question.id,

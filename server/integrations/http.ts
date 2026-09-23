@@ -1,3 +1,5 @@
+import { trackProductEvent } from "../product-analytics/service";
+import { auth } from "../auth/config";
 import "server-only";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
@@ -30,7 +32,10 @@ export function createIntegrationHttpHandlers(service = createIntegrationService
         if (["state", "code", "error"].some((key) => query.getAll(key).length > 1)) throw new IntegrationError("INVALID_STATE");
         await service.handleIntegrationCallback(provider, { state: query.get("state") ?? undefined, code: query.get("code") ?? undefined, error: query.get("error") ?? undefined }, request.headers);
         revalidatePath("/student/settings");
-      } catch (error) { outcome = safeIntegrationError(error).code; }
+      } catch (error) { outcome = safeIntegrationError(error).code;
+        const session = await auth().api.getSession({ headers: request.headers }).catch(() => null);
+        if (session) trackProductEvent(session.user.id, "integration_failed", { provider });
+      }
       // Never render callback parameters or send them to another page/referer.
       try {
         const destination = new URL("/student/settings", integrationOrigin());

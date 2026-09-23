@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../../product-analytics/service";
 import "server-only";
 import { prepareScheduledTasks, lockAndCheckLocalSchedule } from "../../calendar/planner-persistence";
 import { placeStudyTasks } from "../../calendar/planning";
@@ -434,6 +435,7 @@ export class StudyPlannerAgentService {
             return savePlan(transaction);
           })
         : await savePlan(db());
+      trackProductEvent(userId, "study_plan_created", {}, saved.id);
       return publicPlan(saved as DatabasePlan, {
         model: execution.metadata?.model,
         usage: execution.metadata?.usage,
@@ -766,6 +768,7 @@ export class StudyPlannerAgentService {
         }
         await refreshRecommendationsBestEffort(userId);
       }
+      if (parsed.data === "completed") trackProductEvent(userId, "study_task_completed", {}, taskId);
       return publicPlan(await this.loadOwnedPlan(outcome.planId, userId));
     } catch (error) {
       if (error instanceof StudyPlannerAgentError) throw error;

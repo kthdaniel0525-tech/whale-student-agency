@@ -1,3 +1,5 @@
+import { trackProductEvent } from "../product-analytics/service";
+import { betaAccess, BetaAccessError } from "../beta/access";
 import "server-only";
 import { logOperation } from "../operations/monitoring";
 import { signupAllowed } from "../operations/config";
@@ -16,7 +18,7 @@ function createAuth() {
     logger: { level: "warn", log: (level) => { logOperation(level === "error" ? "error" : "warn", "authentication-diagnostic"); } },
     trustedOrigins: [new URL(env.BETTER_AUTH_URL).origin],
     databaseHooks: {
-      user: { create: { before: async (user) => signupAllowed(user.email) ? undefined : false, after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); } } },
+      user: { create: { before: async (user) => signupAllowed(user.email) ? undefined : false, after: async (user) => { await (await import("../entitlements/service")).ensureDefaultSubscription(user.id); try { await betaAccess(user.id); } catch (error) { if (!(error instanceof BetaAccessError)) throw error; } trackProductEvent(user.id, "signup_completed", {}, user.id); } } },
       session: { create: { before: async (session) => {
         const { assertActiveUser, AccountUnavailableError } = await import("../privacy/account-state");
         try { await assertActiveUser(session.userId); }

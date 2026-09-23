@@ -1,4 +1,6 @@
 "use client";
+import { ProductActivityObserver } from "../analytics/observer";
+import { FeedbackPrompt } from "../analytics/feedback-prompt";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -94,6 +96,7 @@ export function Shell({
   }
   return (
     <SidebarProvider>
+      <ProductActivityObserver />
       <Sidebar>
         <SidebarHeader className="px-6 pt-8 pb-10">
           <Link
@@ -118,6 +121,7 @@ export function Shell({
           <Navigation />
         </SidebarContent>
         <SidebarFooter className="p-5 border-t">
+          <Link href="/student/feedback" className="text-sm underline">Feedback &amp; privacy</Link>
           <div className="text-sm font-medium truncate text-foreground">
             {name}
           </div>
@@ -151,7 +155,7 @@ export function Shell({
             <SunMoon size={19} />
           </Button>
         </header>
-        <main className="student-main">{children}</main>
+        <main className="student-main">{path !== "/student/feedback" && <FeedbackPrompt />}{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

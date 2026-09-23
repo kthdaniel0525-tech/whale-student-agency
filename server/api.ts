@@ -1,3 +1,5 @@
+import { trackApiSuccess, trackApiFailure } from "./product-analytics/http";
+import { betaAccess, BetaAccessError } from "./beta/access";
 import { observeRequest, reportError, safeRoute } from "./operations/monitoring";
 import { BillingError } from "./billing/errors";
 import { EntitlementError } from "./entitlements/errors";
@@ -73,11 +75,14 @@ async function apiOperation(
   operation: (userId: string) => Promise<unknown>,
   needsProfile = true,
 ) {
+  let analyticsUserId: string | undefined;
   try {
     checkOrigin(request);
     const session = await auth().api.getSession({ headers: request.headers });
     if (!session) throw new RequestError("Please sign in to continue.", 401);
     await assertActiveUser(session.user.id);
+    analyticsUserId = session.user.id;
+    if (!new URL(request.url).pathname.match(/^\/api\/(student\/(account|product-feedback|product-analytics|billing\/portal)|internal\/beta)(\/|$)/)) await betaAccess(session.user.id);
     if (
       needsProfile &&
       !(await db().profile.findUnique({
@@ -89,6 +94,7 @@ async function apiOperation(
     }
     const usageContext = captureUsageContext({ userId: session.user.id });
     const result = await withAIUsageContext(usageContext, () => operation(session.user.id));
+    trackApiSuccess(session.user.id, request, result);
     if (result instanceof Response) {
       result.headers.set("Cache-Control", "private, no-store");
       result.headers.set("X-Request-ID", usageContext.requestId!);
@@ -96,6 +102,8 @@ async function apiOperation(
     }
     return Response.json(result ?? { success: true }, { headers: { ...noStore, "X-Request-ID": usageContext.requestId! } });
   } catch (error) {
+    trackApiFailure(analyticsUserId, request, error);
+    if (error instanceof BetaAccessError) return Response.json({ error: error.message, code: error.code, accessUrl: "/beta" }, { status: 403, headers: noStore });
     if (error instanceof PrivacyError) return Response.json({ error: new PrivacyError(error.code).message, code: error.code }, { status: error.status, headers: noStore });
     if (error instanceof BillingError) return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: noStore });
     if (error instanceof EntitlementError) return Response.json({ error: error.message, code: error.code, plansUrl: error.plansUrl }, { status: error.status, headers: noStore });

@@ -1,0 +1,5 @@
+import { z } from "zod";
+import { FEATURES, PAGES } from "./events";
+export const surveySchema = z.object({ usefulness: z.number().int().min(1).max(5), valuableFeature: z.enum(FEATURES), confusing: z.string().trim().max(1000).default(""), weeklyValue: z.string().trim().max(1000).default(""), willingnessToPay: z.enum(["yes", "maybe", "no"]), missing: z.string().trim().max(1000).default("") }).strict();
+export const productFeedbackSchema = z.object({ submissionId: z.string().uuid(), category: z.enum(["bug", "feature-request", "usability", "AI-quality", "other", "beta-survey"]), rating: z.number().int().min(1).max(5).optional(), message: z.string().trim().min(1).max(4000), page: z.enum(PAGES).optional(), feature: z.enum(FEATURES).optional(), requestId: z.string().uuid().optional(), workflowRunId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(), survey: surveySchema.optional() }).strict().refine(v => (v.category === "beta-survey") === !!v.survey, "Survey answers require the survey category.");
+export const triageSchema = z.object({ status: z.enum(["new", "reviewed", "planned", "resolved"]), severity: z.enum(["P0", "P1", "P2", "P3"]).nullable() }).strict();

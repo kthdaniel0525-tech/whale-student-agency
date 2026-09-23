@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../../product-analytics/service";
 import { EntitlementError } from "../../entitlements/errors";
 import "server-only";
 import { promptVersion, CONTEXT_VERSION } from "../../ai/evaluation/versions";
@@ -523,6 +524,11 @@ export class AgentExecutor<Extension extends string = never> {
     content: string,
     provider: { model: string; usage?: AIUsage },
   ): AgentExecutionResult<unknown, Extension> {
+    if (prepared.usageContext.userId) {
+      const requestId = z.string().uuid().safeParse(prepared.usageContext.requestId);
+      const properties = { agentId: prepared.agent.id, ...(requestId.success ? { requestId: requestId.data } : {}) };
+      trackProductEvent(prepared.usageContext.userId, "agent_used", { ...properties, success: true }, prepared.adaptiveEvidenceKey);
+    }
     return {
       agentId: prepared.agent.id,
       content,

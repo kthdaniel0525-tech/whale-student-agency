@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import { lockEntitlementUser } from "../entitlements/service";
 import { assertWorkflowAllowance } from "../entitlements/resources";
 import { EntitlementError } from "../entitlements/errors";
@@ -58,6 +59,7 @@ export class WorkflowEngine {
       });
       if (admission.replay) return this.get(admission.run.id, headers);
       run = admission.run;
+      trackProductEvent(userId, "workflow_started", { workflowId: definition.id }, run.id);
     } catch (error) {
       if (error instanceof EntitlementError) throw error;
       if (error instanceof Error && "code" in error && error.code === "P2002") {
@@ -165,6 +167,7 @@ export class WorkflowEngine {
               db().workflowStepRun.updateMany({ where, data: { status: "COMPLETED", outputSummary: output.summary, output: json({ key: step.outputKey, data: output.data ?? output.patch ?? {} }), completedAt: new Date() } }),
               db().workflowRun.updateMany({ where: { id: run.id, userId }, data: { context: json(context) } }),
             ]);
+            trackProductEvent(userId, "workflow_step_completed", { workflowId: definition.id, step: definition.steps.indexOf(step) }, `${run.id}:${step.id}`);
             waiting = Boolean(output.waitForInput);
             completed = true;
             break;
@@ -186,6 +189,8 @@ export class WorkflowEngine {
       if (!waiting) {
         const completed = await db().workflowRun.updateMany({ where: { id: run.id, userId, status: "RUNNING" }, data: { status: "COMPLETED", currentStep: null, completedAt: new Date(), warnings } });
         if (completed.count) {
+          trackProductEvent(userId, "workflow_completed", { workflowId: definition.id }, run.id);
+          trackProductEvent(userId, "ai_request_completed", {}, `workflow:${run.id}`);
           try {
             await observeWorkflowOutcome({
               userId,
@@ -205,7 +210,9 @@ export class WorkflowEngine {
       const stopped = await db().workflowRun.findFirst({ where: { id: run.id, userId }, select: { currentStep: true } });
       await db().workflowStepRun.updateMany({ where: { workflowRunId: run.id, userId, stepId: stopped?.currentStep ?? "", status: { in: ["PENDING", "RUNNING"] } }, data: { status: "FAILED", errorCode: failure.code, completedAt: new Date() } });
       await db().workflowRun.updateMany({ where: { id: run.id, userId, status: { in: ["PENDING", "RUNNING"] } }, data: { status: "FAILED", errorCode: failure.code, failedAt: new Date(), warnings } });
+      trackProductEvent(userId, "workflow_failed", { workflowId: definition.id }, run.id);
     } finally {
+      if (waiting) trackProductEvent(userId, "workflow_waiting", { workflowId: definition.id, step: Math.max(0, definition.steps.findIndex(step => step.id === context.previousStepSummaries.at(-1)?.stepId)) }, `${run.id}:${context.previousStepSummaries.at(-1)?.stepId}`);
       // Human response time is excluded, but active time and call counts survive
       // every pause. Publish WAITING only after checkpointing the execution budget.
       await db().workflowRun.updateMany({ where: { id: run.id, userId }, data: { activeDurationMs: { increment: Date.now() - started }, warnings } });

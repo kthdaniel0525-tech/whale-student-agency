@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import { checkAIUsageAllowance } from "../entitlements/usage";
 import "server-only";
 import { z } from "zod";
@@ -545,10 +546,13 @@ async function guardedAssistant(raw: unknown, headers: Headers, streaming: boole
     const data = { conversation, userMessage, assistantMessage };
     return streaming ? ndjsonStream(async send => { send({ type: "result", data }); }) : data;
   }
+  trackProductEvent(userId, "ai_request_sent", { requestId: context.requestId }, input.turnId);
   const complete = async (conversationId?: string) => {
     try {
       const savedId = conversationId ?? (await db().conversationMessage.findFirst({ where: { userId, turnId: input.turnId, role: "ASSISTANT", metadata: { path: ["workspaceVisible"], equals: true } }, select: { conversationId: true } }))?.conversationId;
       await claim.complete(savedId);
+      const message = savedId ? await db().conversationMessage.findFirst({ where: { userId, conversationId: savedId, turnId: input.turnId, role: "ASSISTANT", metadata: { path: ["presentationKind"], equals: "agent" } }, select: { agentId: true } }).catch(() => null) : null;
+      if (message) trackProductEvent(userId, "ai_request_completed", { requestId: context.requestId, ...(message.agentId ? { agentId: message.agentId } : {}) }, input.turnId);
     } catch {
       // Saved output stays usable when the guard-store completion write fails.
       // The original claim still prevents automatic duplicate execution.

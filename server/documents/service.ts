@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import { admitDocumentProcessing } from "../entitlements/resources";
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
@@ -106,6 +107,7 @@ export async function uploadDocument(
       },
       { timeout: 15000 },
     );
+    trackProductEvent(userId, "document_uploaded", {}, result.id);
     return result;
   } catch (e) {
     const referenced = await db().document.findUnique({ where: { storageKey: key }, select: { id: true } }).then(Boolean).catch(() => true);

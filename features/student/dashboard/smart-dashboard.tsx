@@ -199,7 +199,7 @@ export function SmartDashboard({ initial }: { initial: StudentDashboard }) {
         </div>
       )}
 
-      <section className={`dashboard-next ${data.nextBestAction ? priorityClass(data.nextBestAction.priority) : "is-caught-up"}`} aria-labelledby="next-action-title">
+      <section data-recommendation-id={data.nextBestAction?.id} className={`dashboard-next ${data.nextBestAction ? priorityClass(data.nextBestAction.priority) : "is-caught-up"}`} aria-labelledby="next-action-title">
         <div className="dashboard-next-copy">
           <div className="flex flex-wrap items-center gap-2">
             <span className="dashboard-priority"><Sparkles /> {data.nextBestAction ? `${data.nextBestAction.priority} priority` : "On track"}</span>
@@ -209,18 +209,18 @@ export function SmartDashboard({ initial }: { initial: StudentDashboard }) {
           <p>{data.nextBestAction?.message ?? (data.upcomingDeadlines[0] ? `Your next item is ${data.upcomingDeadlines[0].courseCode} ${data.upcomingDeadlines[0].title} — ${data.upcomingDeadlines[0].dateLabel.toLowerCase()}.` : "No urgent academic action is supported by your current data.")}</p>
         </div>
         {data.nextBestAction ? (
-          <Button size="lg" onClick={() => launchRecommendation(data.nextBestAction!)} disabled={Boolean(busy)}>
+          <Button data-product-event="next_best_action_clicked" size="lg" onClick={() => launchRecommendation(data.nextBestAction!)} disabled={Boolean(busy)}>
             {busy === `recommendation:${data.nextBestAction.id}` ? <Loader2 className="animate-spin" /> : <ArrowRight />}
             {data.nextBestAction.actionLabel}
           </Button>
         ) : (
-          <Button asChild size="lg"><Link href={assistantUrl("What should I study right now?", { type: "agent", id: "study-planner" })}><Play /> Study now</Link></Button>
+          <Button asChild size="lg"><Link data-product-event="study_now_clicked" href={assistantUrl("What should I study right now?", { type: "agent", id: "study-planner" })}><Play /> Study now</Link></Button>
         )}
       </section>
 
       <section className="dashboard-quick-actions" aria-label="Quick AI actions">
         <Link href="/student/assistant"><MessageSquare /> Ask AI</Link>
-        <Link href={assistantUrl("What should I study right now?", { type: "agent", id: "study-planner" })}><Play /> Study now</Link>
+        <Link data-product-event="study_now_clicked" href={assistantUrl("What should I study right now?", { type: "agent", id: "study-planner" })}><Play /> Study now</Link>
         <Link href={assistantUrl("Quiz me on what I most need to practice.", { type: "agent", id: "quiz" }, weakest ? { courseId: weakest.courseId, topicId: weakest.id, topicName: weakest.topic } : {})}><Target /> Quiz me</Link>
         {nextExam && <Link href={assistantUrl(`Prepare me for ${nextExam.title}.`, { type: "workflow", id: "exam-preparation" }, { courseId: nextExam.courseId, examId: nextExam.id })}><CalendarDays /> Prepare for exam</Link>}
         {weakest && <Link href={assistantUrl(`Help me review ${weakest.topic}.`, { type: "agent", id: weakest.needsMoreData ? "quiz" : "tutor" }, { courseId: weakest.courseId, topicId: weakest.id, topicName: weakest.topic })}><Brain /> Review weakest topic</Link>}
@@ -263,7 +263,7 @@ export function SmartDashboard({ initial }: { initial: StudentDashboard }) {
         <section className="dashboard-section" aria-labelledby="upcoming-title">
           <div className="dashboard-section-heading"><div><p className="eyebrow">Deadlines</p><h2 id="upcoming-title">Upcoming</h2></div><span>Next {data.upcomingDeadlines.length}</span></div>
           {data.upcomingDeadlines.length ? <div className="dashboard-deadlines">{data.upcomingDeadlines.map((item) => (
-            <Link href={`/student/courses/${item.courseId}`} key={`${item.kind}-${item.id}`}>
+            <Link data-product-event="upcoming_deadline_opened" href={`/student/courses/${item.courseId}`} key={`${item.kind}-${item.id}`}>
               <span className={`dashboard-deadline-icon is-${item.kind}`}>{item.kind === "exam" ? <GraduationCap /> : <BookOpen />}</span>
               <span className="min-w-0 flex-1"><small>{item.courseCode} · {item.kind}</small><strong>{item.title}</strong></span>
               <span className={item.dateLabel === "Overdue" || item.dateLabel === "Today" ? "is-urgent" : ""}>{item.dateLabel}</span>
@@ -276,7 +276,7 @@ export function SmartDashboard({ initial }: { initial: StudentDashboard }) {
         <section className="dashboard-section" aria-labelledby="recommendations-title">
           <div className="dashboard-section-heading"><div><p className="eyebrow">Personalized</p><h2 id="recommendations-title">Recommendations</h2></div></div>
           {data.recommendations.length ? <div className="dashboard-recommendations">{data.recommendations.map((item) => (
-            <article key={item.id}>
+            <article key={item.id} data-recommendation-id={item.id}>
               <div className="min-w-0 flex-1"><span className={`dashboard-small-priority ${priorityClass(item.priority)}`}>{item.priority}</span><h3>{item.title}</h3><p>{item.message}</p></div>
               <div className="flex shrink-0 gap-1">
                 <Button size="sm" variant="outline" onClick={() => launchRecommendation(item)} disabled={Boolean(busy)}>{busy === `recommendation:${item.id}` ? <Loader2 className="animate-spin" /> : <ArrowRight />} Start</Button>

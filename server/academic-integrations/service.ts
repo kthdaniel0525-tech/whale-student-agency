@@ -1,3 +1,4 @@
+import { trackProductEvent } from "../product-analytics/service";
 import "server-only";
 import { integrationHealth } from "../integrations/health";
 import { recordIntegrationMetric } from "../integrations/metrics";
@@ -114,6 +115,7 @@ export function createAcademicIntegrationService(dependencies: {
             await assertCourse(userId, input.targetCourseId);
         const loaded = await loadPreview(userId, { connectedAccountId: input.connectedAccountId, externalCourseId: input.externalCourseId, options: input.options });
         verifyPreview(input.previewToken, { userId, ...loaded });
+        let createdCourse = false;
         const link = await db().$transaction(async (tx) => {
             await lock(tx, userId, input.connectedAccountId);
             const previous = await tx.externalCourseLink.findUnique({ where: linkKey(input.connectedAccountId, input.externalCourseId) });
@@ -125,10 +127,12 @@ export function createAcademicIntegrationService(dependencies: {
             if (input.targetCourseId && (!await tx.course.findFirst({ where: { id: input.targetCourseId, userId } }) || await tx.externalCourseLink.findUnique({ where: { courseId: input.targetCourseId } })))
                 throw new AcademicIntegrationError("CONFLICT");
             const course = input.targetCourseId ? { id: input.targetCourseId } : await createCourse(userId, { courseName: loaded.course.name, courseCode: input.courseCode, semester: input.semester, professor: loaded.course.instructor ?? "", description: "" }, tx);
+            createdCourse = !input.targetCourseId;
             const result = await tx.externalCourseLink.create({ data: { userId, connectedAccountId: input.connectedAccountId, provider: loaded.course.provider, externalId: input.externalCourseId, courseId: course.id, options: input.options, externalEndsAt: stamp(loaded.course.endDate), requestQueuedAt: new Date() } });
             await publish(tx, result);
             return result;
         }, { timeout: 15000 });
+        if (createdCourse) trackProductEvent(userId, "course_created", {}, link.courseId);
         academicEvent("IMPORT", link.id);
         return status(userId, link.courseId);
     }
@@ -290,6 +294,7 @@ export function createAcademicIntegrationService(dependencies: {
                                 }
                             }
                         });
+                        if (change === "created") trackProductEvent(userId, kind === "assignments" ? "assignment_created" : "exam_created", {}, `${link.id}:${kind}:${item.externalId}`);
                         if (change === "unchanged")
                             result.unchanged++;
                         else

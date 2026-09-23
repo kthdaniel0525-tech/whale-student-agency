@@ -98,11 +98,11 @@ function TopicRow({ topic, onSelect }: { topic: ProgressTopic; onSelect: () => v
       </div>
       <div className="progress-topic-actions">
         {topic.needsMoreData ? (
-          <Button asChild size="sm" variant="outline"><Link href={topicUrl(topic, "diagnostic")}>Diagnostic quiz</Link></Button>
+          <Button asChild size="sm" variant="outline"><Link data-product-event={topic.status === "weak" ? "weak_topic_action_clicked" : undefined} href={topicUrl(topic, "diagnostic")}>Diagnostic quiz</Link></Button>
         ) : <>
-          <Button asChild size="sm" variant="outline"><Link href={topicUrl(topic, "review")}>Review</Link></Button>
-          <Button asChild size="sm" variant="outline"><Link href={topicUrl(topic, "practice")}>Practice</Link></Button>
-          {topic.status === "weak" && <Button asChild size="sm"><Link href={topicUrl(topic, "recovery")}>Start recovery</Link></Button>}
+          <Button asChild size="sm" variant="outline"><Link data-product-event={topic.status === "weak" ? "weak_topic_action_clicked" : undefined} href={topicUrl(topic, "review")}>Review</Link></Button>
+          <Button asChild size="sm" variant="outline"><Link data-product-event={topic.status === "weak" ? "weak_topic_action_clicked" : undefined} href={topicUrl(topic, "practice")}>Practice</Link></Button>
+          {topic.status === "weak" && <Button asChild size="sm"><Link data-product-event={topic.status === "weak" ? "weak_topic_action_clicked" : undefined} href={topicUrl(topic, "recovery")}>Start recovery</Link></Button>}
         </>}
       </div>
     </article>
@@ -138,7 +138,7 @@ function TopicDetail({ topic }: { topic: ProgressTopic }) {
         <div className="progress-mini-heading"><strong>Recent quiz performance</strong><span>{topic.recentQuizzes.length} sessions</span></div>
         {topic.recentQuizzes.map((quiz, index) => <div key={`${quiz.date}-${index}`}><span>{formatDate(quiz.date)} · {quiz.title}<small>{quiz.difficulty}</small></span><strong>{quiz.accuracy}%</strong></div>)}
       </div>}
-      <Button asChild className="mt-4"><Link href={topicUrl(topic, action)}>
+      <Button asChild className="mt-4"><Link data-product-event={topic.status === "weak" ? "weak_topic_action_clicked" : undefined} href={topicUrl(topic, action)}>
         {action === "diagnostic" ? "Take diagnostic quiz" : action === "recovery" ? "Start topic recovery" : action === "review" ? "Review with Tutor" : "Practice this topic"}
         <ArrowRight />
       </Link></Button>
@@ -217,7 +217,7 @@ export function ProgressExperience({ initial }: { initial: StudentProgress }) {
       {error && <div className="progress-error" role="alert"><AlertTriangle /> {error}</div>}
       {data.sectionErrors.length > 0 && <div className="progress-warning" role="status" aria-label={`Unavailable progress sections: ${data.sectionErrors.join(", ")}`}>Some progress details are temporarily unavailable. The remaining sections are current.</div>}
 
-      {data.nextBestAction && <section className={`progress-next priority-${data.nextBestAction.priority}`} aria-labelledby="progress-next-title">
+      {data.nextBestAction && <section data-recommendation-id={data.nextBestAction.id} className={`progress-next priority-${data.nextBestAction.priority}`} aria-labelledby="progress-next-title">
         <div><span><Sparkles /> Next best action</span><h2 id="progress-next-title">{data.nextBestAction.title}</h2><p>{data.nextBestAction.message}</p></div>
         <Button size="lg" onClick={launchRecommendation} disabled={launching}>{launching ? <Loader2 className="animate-spin" /> : <ArrowRight />}{data.nextBestAction.actionLabel}</Button>
       </section>}
@@ -313,7 +313,7 @@ export function ProgressExperience({ initial }: { initial: StudentProgress }) {
             {exam.readinessScore !== null && exam.readinessLevel !== "insufficient-data" && <Progress value={exam.readinessScore} aria-label={`${exam.title} readiness ${exam.readinessScore}%`} />}
             <p>{exam.explanation}</p>
             {exam.weakTopics[0] && <p><strong>Key weakness:</strong> {exam.weakTopics[0]}</p>}
-            <div className="exam-actions"><Button asChild size="sm"><Link href={assistantUrl(`Prepare me for ${exam.title}.`, { type: "workflow", id: "exam-preparation" }, { courseId: exam.courseId, examId: exam.examId })}>Prepare for exam</Link></Button><Button asChild size="sm" variant="outline"><Link href={assistantUrl(`Update my study plan for ${exam.title}.`, { type: "agent", id: "study-planner" }, { courseId: exam.courseId, examId: exam.examId })}>Update plan</Link></Button><Button asChild size="sm" variant="outline"><Link href={assistantUrl(`Give me a practice quiz for ${exam.title}.`, { type: "agent", id: "quiz" }, { courseId: exam.courseId, examId: exam.examId })}>Practice quiz</Link></Button></div>
+            <div className="exam-actions"><Button asChild size="sm"><Link data-product-event="exam_readiness_action_clicked" href={assistantUrl(`Prepare me for ${exam.title}.`, { type: "workflow", id: "exam-preparation" }, { courseId: exam.courseId, examId: exam.examId })}>Prepare for exam</Link></Button><Button asChild size="sm" variant="outline"><Link href={assistantUrl(`Update my study plan for ${exam.title}.`, { type: "agent", id: "study-planner" }, { courseId: exam.courseId, examId: exam.examId })}>Update plan</Link></Button><Button asChild size="sm" variant="outline"><Link href={assistantUrl(`Give me a practice quiz for ${exam.title}.`, { type: "agent", id: "quiz" }, { courseId: exam.courseId, examId: exam.examId })}>Practice quiz</Link></Button></div>
           </article>)}</div> : <p className="progress-empty-copy">No upcoming exam is available in the current planning window.</p>}
         </section>
       </div>
