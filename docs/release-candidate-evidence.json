@@ -1,0 +1,306 @@
+{
+  "date": "2026-09-23",
+  "baseCommit": "2cb1f942d97b3d23b71905382dc81af1bc583af3",
+  "decision": "NO-GO",
+  "releaseCandidateVersion": null,
+  "scope": "Remediation of original B1-B5; no new product features or external production deployment",
+  "blockerUpdates": [
+    {
+      "id": "B1",
+      "state": "OPEN; evidence validation hardened",
+      "fixed": "Insufficient baseline comparisons and failed comparison models now exit nonzero. Added strict read-only release evidence check without relaxing thresholds. Production promotion now depends on the strict evidence check on the trusted staging runner.",
+      "remaining": "Actual AI key, reviewed generated baseline/candidate evidence, representative source-faithfulness cases and sufficient profile coverage. Sparse profiles and real workflow/Manager observations need reviewed evidence via the existing evaluation adapter."
+    },
+    {
+      "id": "B2",
+      "state": "OPEN; container containment and local deployment verified",
+      "fixed": "Production CPU/memory/swap/process/tmpfs limits are applied and inspected. Closed-core-beta preset and authenticated local production Compose drill pass.",
+      "remaining": "Real deployment target, environment-specific secrets, durable storage/operator acceptance, target-host load/AI latency and capacity evidence. No object-storage integration was added."
+    },
+    {
+      "id": "B3",
+      "state": "OPEN; external infrastructure required",
+      "fixed": "Existing monitoring/redaction and protected metrics were reverified locally.",
+      "remaining": "Real Sentry/uptime recipients and delivered application/job/database alert receipts."
+    },
+    {
+      "id": "B4",
+      "state": "OPEN; unsafe rollback admission fixed",
+      "fixed": "A beta deployment refuses unmarked/pre-beta images before role replacement; rollback validates runtime first. Existing schema review remains required.",
+      "remaining": "Encrypted off-host backup/retention receipts, target-host restore, and a reviewed exact rollback image with authorization, privacy and queued-job drill evidence."
+    },
+    {
+      "id": "B5",
+      "state": "OPEN for public launch; paid scope disabled",
+      "fixed": "Deployment preset disables new paid checkout and unverified integrations/Career with existing switches. Private feedback remains.",
+      "remaining": "Business/legal-reviewed public policy pages and support ownership. Real Stripe verification is required only before enabling paid launch."
+    }
+  ],
+  "categories": [
+    {
+      "name": "Security",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "No confirmed unresolved Critical/High finding from the original audit. Security and authorization suites pass; native process limits and beta rollback denial added. Inline CSP and external deployment controls remain risks."
+    },
+    {
+      "name": "Privacy",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Deletion, analytics opt-out and redaction regressions pass. Actual external retention, published policy and target-host recovery remain unverified."
+    },
+    {
+      "name": "Data Integrity",
+      "status": "PASS",
+      "evidence": "Full data-integrity regressions and fresh 39-migration checks pass; no reset of existing user data or data-model changes."
+    },
+    {
+      "name": "AI Quality",
+      "status": "FAIL",
+      "evidence": "Offline FULL checks pass. Release evidence checker correctly rejects fixtures/insufficient paired evidence; real generated baseline and candidate observations are unavailable."
+    },
+    {
+      "name": "RAG",
+      "status": "FAIL",
+      "evidence": "Isolation, filters, refresh and retrieval integration tests pass. Pinned model/PDF load under OS limits passes. Representative live source faithfulness remains unproven."
+    },
+    {
+      "name": "Agents",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Existing full unit/integration suite passes; actual generator/judge release quality remains blocked. No model floors or prompts were weakened."
+    },
+    {
+      "name": "Workflows",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Existing five workflow integration suites pass pause/resume, retries, ownership, learning refresh and bounded loops. Provider responses are mocked."
+    },
+    {
+      "name": "Billing",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "DISABLED AT INITIAL LAUNCH in the deployment preset. Billing/signature/entitlement tests pass; enabling paid access still requires actual Stripe test-mode checkout, portal and lifecycle evidence."
+    },
+    {
+      "name": "Integrations",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Calendar/Drive/LMS are DISABLED AT INITIAL LAUNCH. OAuth/integration regressions pass, with external boundaries mocked; real provider verification is still required before enabling."
+    },
+    {
+      "name": "Automation",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Local production-image workers and heartbeats pass; targeted flags keep required document embeddings available. Target-host schedules and operational alert delivery remain unverified."
+    },
+    {
+      "name": "Infrastructure",
+      "status": "FAIL",
+      "evidence": "Resource ceilings, private read-only app roles, production image, HTTPS, restricted runtime DB role, migrations and authenticated local smoke pass. Actual host/storage acceptance, backups and approved rollback drill are missing."
+    },
+    {
+      "name": "Monitoring",
+      "status": "FAIL",
+      "evidence": "Redaction and metrics tests plus local worker/health checks pass. No externally delivered Sentry/uptime/operator alert receipt is available."
+    },
+    {
+      "name": "Performance",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Bounded local production-image single-user page reads measured without severe delay; no public-load/capacity or real AI latency/TTFT evidence. Target-host performance remains part of B2."
+    },
+    {
+      "name": "UX",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "No new core UX failure in the full regression suite. Prior 21 browser cases remain the UI evidence; UI code was unchanged and that browser suite was not rerun in this remediation."
+    },
+    {
+      "name": "Mobile",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Retains prior mobile Quiz/workflow/onboarding coverage. Real-device and screen-reader checks remain; no mobile UI changes in this remediation."
+    },
+    {
+      "name": "Support",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Existing private feedback remains available. Business-reviewed public policies and an accountable support owner are still required for public launch."
+    },
+    {
+      "name": "Beta Feedback",
+      "status": "PASS WITH KNOWN RISK",
+      "evidence": "Local non-fixture beta users/events/feedback remain absent. No real P0/P1 inventory or successful activation/retention claim can be inferred."
+    }
+  ],
+  "verification": {
+    "targeted": {
+      "files": 4,
+      "passed": 93
+    },
+    "full": {
+      "files": 71,
+      "passed": 1748,
+      "failed": 0,
+      "log": "/private/tmp/rc-full-tests.log"
+    },
+    "typescript": "PASS",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 4
+    },
+    "dependencyAudit": {
+      "vulnerabilities": 0
+    },
+    "offlineEvaluation": {
+      "mode": "FULL",
+      "cases": 52,
+      "failedChecks": 0,
+      "evidence": [
+        "system",
+        "evaluator-fixture"
+      ]
+    },
+    "releaseQualityGate": {
+      "passed": false,
+      "unprovenProfiles": [
+        "academic-manager",
+        "grading",
+        "notes",
+        "quiz",
+        "rag-generation",
+        "rag-retrieval",
+        "study-planner",
+        "tutor",
+        "workflow"
+      ],
+      "exitCode": 1,
+      "meaning": "Correct rejection of currently available fixture-only evidence; not a passing live quality evaluation"
+    },
+    "liveQualityEvaluation": {
+      "status": "NOT RUN",
+      "reason": "No usable API key or reviewed generated baseline available"
+    },
+    "productionBuild": {
+      "status": "PASS",
+      "image": "student-agency-remediation:local",
+      "manifestListDigest": "sha256:9f2470cdf6c13201a75f6e71612b49c9c5fda18bf413db5e68b87d6ba5699890"
+    },
+    "migrations": {
+      "migrations": 39,
+      "tables": 71,
+      "pgvector": "0.8.2",
+      "status": "PASS"
+    },
+    "localDeploymentDrill": {
+      "scope": "isolated local production image and Compose; synthetic credentials; AI and external monitoring disabled",
+      "services": [
+        {
+          "service": "documents",
+          "memoryBytes": 2147483648,
+          "nanoCPUs": 2000000000,
+          "pidsLimit": 256,
+          "readOnly": true,
+          "accessPolicy": "beta-v1"
+        },
+        {
+          "service": "jobs",
+          "memoryBytes": 2147483648,
+          "nanoCPUs": 2000000000,
+          "pidsLimit": 256,
+          "readOnly": true,
+          "accessPolicy": "beta-v1"
+        },
+        {
+          "service": "postgres",
+          "memoryBytes": 2147483648,
+          "nanoCPUs": 2000000000,
+          "pidsLimit": 256,
+          "readOnly": false,
+          "accessPolicy": null
+        },
+        {
+          "service": "proxy",
+          "memoryBytes": 268435456,
+          "nanoCPUs": 500000000,
+          "pidsLimit": 128,
+          "readOnly": false,
+          "accessPolicy": null
+        },
+        {
+          "service": "web",
+          "memoryBytes": 2147483648,
+          "nanoCPUs": 2000000000,
+          "pidsLimit": 256,
+          "readOnly": true,
+          "accessPolicy": "beta-v1"
+        }
+      ],
+      "authenticatedSmoke": {
+        "passed": 9,
+        "authenticated": true,
+        "workers": true
+      },
+      "localSingleUserTimings": [
+        {
+          "page": "Dashboard",
+          "samples": 10,
+          "p50Ms": 19,
+          "p95Ms": 24
+        },
+        {
+          "page": "Course",
+          "samples": 10,
+          "p50Ms": 14,
+          "p95Ms": 16
+        },
+        {
+          "page": "Progress",
+          "samples": 10,
+          "p50Ms": 15,
+          "p95Ms": 16
+        },
+        {
+          "page": "AI Workspace",
+          "samples": 10,
+          "p50Ms": 14,
+          "p95Ms": 15
+        }
+      ],
+      "limitations": "One synthetic course; ten warm serial reads per page; not hosted staging, load capacity, AI latency or external alert evidence."
+    },
+    "pinnedModelUnderQuotas": {
+      "pinnedLocalModelLoaded": true,
+      "peakRSSMiB": 371
+    },
+    "browser": "Prior 21 passing cases retained; not rerun in this remediation",
+    "releaseWorkflow": "YAML syntax and production dependency verified; staging must pass the reviewed quality-report check before promotion."
+  },
+  "beta": {
+    "scope": "local database; excludes .test fixture accounts; not deployed beta evidence",
+    "activeBetaUsers": 0,
+    "eventCount": 0,
+    "feedback": []
+  },
+  "remainingEnvironmentEvidence": [
+    "Actual hosted staging/production target",
+    "Environment-scoped generation key",
+    "Reviewed generated quality baseline and sufficient cases",
+    "External alert receipt",
+    "Encrypted off-host backup/restore and rollback receipt",
+    "Public policy/support decisions",
+    "Actual Google/Stripe verification if enabled"
+  ],
+  "cleanup": "Temporary Compose project, containers and volumes removed. Existing development database and server retained. No commit, tag, push or external deployment performed.",
+  "filesChanged": [
+    ".github/workflows/release.yml",
+    "compose.production.yaml",
+    "deploy/compose.env.example",
+    "deploy/runtime.env.example",
+    "docker/app.Dockerfile",
+    "docs/ai-quality-evaluation.md",
+    "docs/launch-readiness-audit.md",
+    "docs/production-operations.md",
+    "docs/release-candidate-evidence.json",
+    "docs/release-candidate-remediation.md",
+    "docs/release-notes.md",
+    "docs/security-privacy-audit.md",
+    "scripts/check-release-quality.ts",
+    "scripts/deploy-release.mjs",
+    "scripts/run-evals.ts",
+    "server/ai/evaluation/release-gate.ts",
+    "tests/production-operations.test.ts",
+    "tests/release-deployment.test.ts",
+    "tests/release-quality.test.ts"
+  ]
+}

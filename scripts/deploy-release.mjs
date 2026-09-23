@@ -24,8 +24,17 @@ function run(args) {
 run(["config", "--quiet"]);
 if (mode !== "check") {
   run(["pull", "web", "jobs", "documents", "proxy"]);
+  if (runtime.BETA_MODE === "true") {
+    const inspected = spawnSync("docker", ["image", "inspect", "--format", "{{json .Config.Labels}}", image], { env, encoding: "utf8" });
+    let labels;
+    try { labels = JSON.parse(inspected.stdout ?? ""); } catch { /* Fail closed on absent/invalid image metadata. */ }
+    if (inspected.status !== 0 || labels?.["io.student-agency.access-policy"] !== "beta-v1") {
+      throw new Error("Target image lacks the reviewed beta access policy; no application or worker replacement was performed");
+    }
+  }
+  // Rollbacks must also accept the current runtime configuration before restart.
+  run(["run", "--rm", "--no-deps", "web", "validate"]);
   if (mode === "deploy") {
-    run(["run", "--rm", "--no-deps", "web", "validate"]);
     // Deterministic synthetic evals with the deployed model catalog/config. No
     // --live flag: this gate never consumes user content or provider quota.
     run(["run", "--rm", "--no-deps", "--entrypoint", "node", "web", "--env-file=/run/secrets/runtime.env", "--conditions=react-server", "--import", "tsx", "scripts/run-evals.ts", "--mode", "FAST_SMOKE"]);

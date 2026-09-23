@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 COPY --from=build --chown=node:node /app /app
 ARG RELEASE_SHA=development
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 RELEASE_SHA=$RELEASE_SHA
+# The release script checks the immutable target image before replacing roles.
+LABEL io.student-agency.access-policy="beta-v1"
 USER node
 EXPOSE 3000
 ENTRYPOINT ["node", "--env-file=/run/secrets/runtime.env", "scripts/container-entry.mjs"]

@@ -8,7 +8,13 @@ x-app: &app
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
-  tmpfs: ["/tmp:uid=1000,gid=1000,mode=1770", "/app/.next/cache:uid=1000,gid=1000,mode=0700"]
+  # Bound native parser/model allocations as well as the JavaScript heap.
+  # Defaults are containment limits, not a claim about supported user capacity.
+  cpus: ${APP_CPU_LIMIT:-2.0}
+  mem_limit: ${APP_MEMORY_LIMIT:-2g}
+  memswap_limit: ${APP_MEMORY_LIMIT:-2g}
+  pids_limit: 256
+  tmpfs: ["/tmp:uid=1000,gid=1000,mode=1770,size=256m", "/app/.next/cache:uid=1000,gid=1000,mode=0700,size=128m"]
   secrets:
     - source: runtime_env
       target: runtime.env
@@ -27,6 +33,10 @@ services:
     build: { context: ., dockerfile: docker/postgres.Dockerfile }
     image: student-agency-postgres:17.11-vector0.8.2
     restart: unless-stopped
+    cpus: ${DATABASE_CPU_LIMIT:-2.0}
+    mem_limit: ${DATABASE_MEMORY_LIMIT:-2g}
+    memswap_limit: ${DATABASE_MEMORY_LIMIT:-2g}
+    pids_limit: 256
     environment:
       POSTGRES_USER: agency_owner
       POSTGRES_DB: agency
@@ -99,6 +109,10 @@ services:
   proxy:
     image: caddy:2.11.4-alpine
     restart: unless-stopped
+    cpus: ${PROXY_CPU_LIMIT:-0.5}
+    mem_limit: ${PROXY_MEMORY_LIMIT:-256m}
+    memswap_limit: ${PROXY_MEMORY_LIMIT:-256m}
+    pids_limit: 128
     ports: ["80:80", "443:443"]
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?Set canonical APP_DOMAIN}

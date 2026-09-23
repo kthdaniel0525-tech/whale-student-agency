@@ -46,6 +46,23 @@ Reports contain no output text. Save a reviewed report using `--out`, then load 
 
 Cost/latency deltas use the same paired cases. Unknown prices stay null. Generator cost estimates cover the reported successful response; failed-attempt costs require supplied usage observations. Judge cost is separate. Fallback/tier fields remain unknown when the provider response does not expose them; injected observations or stored usage supply actual attribution. `getQualityAnalytics` joins owned evaluation/usage IDs, separates evaluator types and versions, counts feedback independently, and flags positive evaluations paired with negative satisfaction. Its bounded (5,000 row) result reports truncation. Observational model/fallback cohorts do not establish causal equivalence; use paired synthetic comparisons before changing routing.
 
+## Release evidence check
+
+Ordinary `--baseline` and `--compare-model` commands now exit nonzero for **insufficient-data** as well as regressions, failed candidate generation and judge failures. A successful fixture-only run without a comparison still means only that its deterministic checks passed. Comparing the current FULL offline dataset to itself is insufficient for several profiles; do not lower sample requirements to make that command green.
+
+After collecting and reviewing real release observations, run this read-only check (no provider calls):
+
+```sh
+node --conditions=react-server --import tsx scripts/check-release-quality.ts \
+  --baseline /secure/quality/known-good.json --report /secure/quality/candidate.json
+```
+
+The release workflow invokes this check on the trusted staging runner before production promotion. It expects `/etc/agency/quality/known-good.json` and `/etc/agency/quality/<full-git-sha>.json`; prepare reviewed, release-matched evidence outside the checkout. The existing offline dataset intentionally cannot satisfy this gate.
+
+Add `--include-career` if Career will be enabled for any release cohort. The check requires FULL reports, all core profiles, existing minimum paired sample counts and thresholds, measured semantic dimensions, generator/provider/judge attribution, no unjudged executions and compatible baseline comparisons. It rejects offline evaluator fixtures, missing evidence, failed observations even with a misleading summary count, mismatched datasets/judges, and duplicate observations. No model routing policy or threshold changes are made.
+
+The current CLI dataset has sparse profiles and does not execute every live agent/workflow path. Use the existing `runEvals` execution-observation adapter with actual application execution plus the judge, and curate reviewed representative cases where coverage is below the existing five-sample minimum. Do not relabel static fixtures as generated observations. Baseline provenance, human review, target image/configuration binding and actual provider execution are operator responsibilities; a valid JSON file cannot prove them. Archive reviewed reports with the exact immutable release image and reviewer. This checker is a required release-review step, not automatic proof that live quality passed or a replacement for the broader launch checklist.
+
 ## Feedback and optional sampling
 
 Assistant responses have optional thumbs-up/down and optional reason/comment. Authenticated GET/PUT `/api/student/assistant/messages/[messageId]/feedback` verifies visible assistant-message ownership, rejects client identity fields and checks request origin. Feedback links to trusted message request IDs and matching owned usage where available. Workflow summaries without a generating provider attempt are not falsely attributed to the last specialist. Satisfaction scores are not automatic correctness labels. Comments are private user content and excluded from analytics and evaluation records.

@@ -20,6 +20,9 @@ import { DEFAULT_MODEL_CATALOG } from "@/server/ai/routing/catalog";
 import { billingConfig } from "@/server/billing/config";
 import type { ErrorEvent } from "@sentry/node";
 import { deploymentSmoke } from "../scripts/deployment-smoke.mjs";
+import { parse } from "dotenv";
+import { betaConfig } from "@/server/beta/config";
+import { GuardrailService } from "@/server/ai/guardrails/service";
 
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 function deployed(environment = "production") {
@@ -30,6 +33,18 @@ function deployed(environment = "production") {
   for (const [key, value] of Object.entries(values)) vi.stubEnv(key, value);
 }
 describe("production environment boundaries", () => {
+  it("ships a closed core beta preset without disabling document ingestion", async () => {
+    const template = parse(await readFile("deploy/runtime.env.example", "utf8"));
+    for (const key of ["BETA_MODE", "BETA_DEFAULT_COHORT", "BETA_COHORT_FLAGS_JSON", "ENTITLEMENT_FEATURE_FLAGS_JSON", "AI_GUARDRAILS_JSON", "BILLING_ENABLED", "BILLING_CHECKOUT_ENABLED"]) vi.stubEnv(key, template[key]);
+    expect(betaConfig().enabled).toBe(true);
+    expect(featureFlags()).toMatchObject({ "integration.calendar": false, "integration.drive": false, "integration.lms": false, "ai.career": false, "workflow.career-preparation": false });
+    expect(featureFlags()["ai.tutor"]).not.toBe(false);
+    expect(billingConfig().enabled).toBe(false);
+    const guards = new GuardrailService();
+    expect(() => guards.assertEnabled({ source: "rag-document", guardProfile: "BACKGROUND" })).not.toThrow();
+    expect(() => guards.assertEnabled({ agentId: "tutor" })).not.toThrow();
+    expect(() => guards.assertEnabled({ guardFeature: "evaluate-ai-response", guardProfile: "BACKGROUND" })).toThrow();
+  });
   it("keeps development optional integrations optional", () => {
     vi.stubEnv("NODE_ENV", "development"); vi.stubEnv("APP_ENV", "development");
     expect(validateRuntimeConfiguration().deployed).toBe(false);

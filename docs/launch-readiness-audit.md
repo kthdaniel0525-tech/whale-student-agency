@@ -1,5 +1,7 @@
 # Final launch readiness audit
 
+Follow-up: [release candidate blocker remediation](release-candidate-remediation.md) records the subsequent fixes and current decision. This file preserves the original audit evidence and scope.
+
 ## Decision
 
 **NO-GO — public Student AI Agency V1.** Audited on 2026-09-23 against `1d8911f` plus the small audit fixes below. Repository checks provide strong local engineering evidence. Required live AI quality, deployed monitoring, configuration and recovery evidence is missing; this is not a claim that a new Critical vulnerability or data-loss bug was found.

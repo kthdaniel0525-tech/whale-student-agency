@@ -70,6 +70,13 @@ jobs:
           SMOKE_COOKIE: ${{ secrets.SMOKE_COOKIE }}
           SMOKE_COURSE_ID: ${{ vars.SMOKE_COURSE_ID }}
           SMOKE_DOCUMENT_ID: ${{ vars.SMOKE_DOCUMENT_ID }}
+      - name: Require reviewed release quality evidence before promotion
+        # Prepared on the trusted staging runner, outside the checkout. This
+        # read-only gate makes no paid calls and fails closed without evidence.
+        run: >-
+          node --conditions=react-server --import tsx scripts/check-release-quality.ts
+          --baseline /etc/agency/quality/known-good.json
+          --report "/etc/agency/quality/${GITHUB_SHA}.json"
   production:
     needs: [image, staging]
     runs-on: [self-hosted, agency-production]

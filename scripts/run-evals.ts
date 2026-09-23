@@ -16,10 +16,13 @@ const output = get("--out");
 if (output) await writeFile(output, JSON.stringify(report, null, 2) + "\n");
 const baseline = get("--baseline");
 const comparison = baseline ? compareEvaluations(reportSchema.parse(JSON.parse(await readFile(baseline, "utf8"))), report) : undefined;
+let failed = report.failedChecks > 0 || !!comparison?.some(c => !["stable", "improved"].includes(c.status));
 console.log(JSON.stringify({ mode, cases: new Set(report.rows.map(r => r.caseId)).size, failedChecks: report.failedChecks, evidence: [...new Set(report.rows.map(r => r.evidence))], ...(comparison ? { comparison } : {}), ...(output ? { report: output } : {}) }, null, 2));
 if (get("--compare-model")) {
   const candidate = await runEvals({ ...options, modelOverride: get("--compare-model") });
-  console.log(JSON.stringify({ modelComparison: compareEvaluations(report, candidate) }, null, 2));
+  const modelComparison = compareEvaluations(report, candidate);
+  console.log(JSON.stringify({ modelComparison }, null, 2));
+  failed ||= candidate.failedChecks > 0 || modelComparison.some(c => !["stable", "improved"].includes(c.status));
   if (output) await writeFile(`${output}.comparison.json`, JSON.stringify(candidate, null, 2) + "\n");
 }
-if (report.failedChecks || comparison?.some(c => c.status === "regressed")) process.exitCode = 1;
+if (failed) process.exitCode = 1;
