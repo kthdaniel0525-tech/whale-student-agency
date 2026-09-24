@@ -8,7 +8,7 @@ This record covers only the five remaining release-candidate blockers. It does n
 
 No production-like hosted staging target is connected to this checkout or execution session. The repository contains a self-hosted Compose release path and GitHub release workflow, but the required `agency-staging` runner, staging URL, immutable deployed image, host configuration, secrets, synthetic session, database, durable document volume, scheduler, workers, and monitoring project are not available here.
 
-An existing private OpenAI Sites deployment was inspected rather than assumed to be staging. It is a legacy CodeChoiceAI deployment from source revision `daf620b69cb044ed8045effece805ac88c6b2fa5`, last published on 2026-09-09. Its runtime environment revision is zero with no configured entries, while the current candidate is `5b9b9605c563bcd01803fb325827ed9e4a6706b4`. It has no declared D1 or R2 binding and does not provide this application's PostgreSQL, pgvector, private document storage, workers, schedules, or OpenAI configuration. It is explicitly rejected as RC staging evidence.
+No existing hosted deployment provides this application's PostgreSQL, pgvector, private document storage, workers, schedules, monitoring, and environment-scoped OpenAI configuration. No unrelated or historical deployment is accepted as RC staging evidence.
 
 Because no valid target exists, the required hosted core journey, restart/recovery drill, synthetic failure monitoring receipt, scheduler timing, duplicate-delivery check, and timezone check were not run. Local Docker and browser results remain useful engineering evidence but are not relabeled as hosted evidence.
 

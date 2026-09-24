@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AssistantMessageView } from "@/features/student/assistant/message-renderer";
 import { careerProfileSchema, projectSchema } from "@/server/career/schemas";
-import { chatGPTSignInPath } from "@/app/chatgpt-auth";
 
 describe("untrusted text and navigation", () => {
   it.each(["user", "assistant"] as const)("renders %s HTML/Markdown as inert text", role => {
@@ -17,8 +16,5 @@ describe("untrusted text and navigation", () => {
   it.each(["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "//evil.example", "file:///etc/passwd"])("rejects unsafe displayed project/profile URL %s", link => {
     expect(projectSchema.safeParse({ name: "Test", description: "Test", link }).success).toBe(false);
     expect(careerProfileSchema.safeParse({ portfolioLinks: [link] }).success).toBe(false);
-  });
-  it.each(["//evil.example", "/\\evil.example", "https://evil.example", "javascript:alert(1)"])("legacy return path cannot become an external redirect: %s", returnTo => {
-    expect(chatGPTSignInPath(returnTo)).toBe("/signin-with-chatgpt?return_to=%2F");
   });
 });

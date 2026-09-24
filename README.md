@@ -43,8 +43,6 @@ Upload a PDF, TXT or Markdown file from a course or Documents. When it becomes R
 
 See the [Documents + RAG handoff](docs/student-agency/DOCUMENTS-RAG.md) for architecture, schema, APIs, changed files, security, setup and limitations; the [foundation handoff](docs/student-agency/FOUNDATION.md) describes the prior phase. Run `npm run check`, `npm run lint`, `npm test`, `npm run test:e2e` and `npm run test:migration` for verification. Tests need the app and PostgreSQL running and the model prepared. Stop the worker for `npm test` (tests control job claims); start it for `npm run test:e2e`. Install the browser once with `npx playwright install chromium`.
 
-The former code-review app is retained at `/code-review`. The [original Sites starter instructions](docs/SITES-STARTER.md) are historical; the current PostgreSQL adapter requires Node hosting and cannot be published with the retained Sites scripts unchanged.
-
 Google Calendar setup and behavior: [Google Calendar integration](docs/google-calendar.md).
 
 Google Drive course imports: [setup, permissions, refresh safety and tests](docs/google-drive.md).

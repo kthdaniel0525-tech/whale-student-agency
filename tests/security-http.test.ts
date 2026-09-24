@@ -10,7 +10,6 @@ import { api, readJson } from "@/server/api";
 import { getEnv } from "@/server/env";
 import { AIError } from "@/server/ai/errors";
 import { POST as authPost, GET as authGet } from "@/app/api/auth/[...all]/route";
-import { POST as legacyConnection } from "@/app/api/connection/route";
 import nextConfig from "../next.config";
 
 const origin = process.env.BETTER_AUTH_URL!;
@@ -33,7 +32,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 afterAll(async () => {
   if (userId) {
     await db().user.deleteMany({ where: { id: userId, email } });
-    for (const action of ["legacy-ai", "change-password"]) {
+    for (const action of ["change-password"]) {
       const key = "credential:" + createHmac("sha256", process.env.BETTER_AUTH_SECRET!).update(`${action}:${userId.trim().toLowerCase()}`).digest("hex");
       await db().rateLimit.deleteMany({ where: { key } });
     }
@@ -102,12 +101,6 @@ describe.sequential("HTTP security boundaries", () => {
     await expect(readJson(request("/api/student/profile", { method: "PUT", body: { value: "x".repeat(33000) } }), z.unknown())).rejects.toMatchObject({ status: 413 });
     const req = request("/api/student/profile", { method: "PUT", body: {} }); req.headers.set("content-type", "application/json-evil");
     await expect(readJson(req, z.unknown())).rejects.toMatchObject({ status: 415 });
-  });
-  it("protects legacy BYO-key endpoints and limits all sessions with a stable user bucket", async () => {
-    expect((await legacyConnection(request("/api/connection", { method: "POST", body: { key: "mock" } }))).status).toBe(401);
-    // Invalid payloads consume capacity but never call Google.
-    for (let i = 0; i < 10; i++) expect((await legacyConnection(request("/api/connection", { method: "POST", body: { key: "" }, cookie }))).status).toBe(400);
-    expect((await legacyConnection(request("/api/connection", { method: "POST", body: { key: "mock" }, cookie }))).status).toBe(429);
   });
   it("blocks raw Better Auth deletion and rejects external login callbacks", async () => {
     for (const path of ["/api/auth/delete-user", "/api/auth/delete-user/callback"]) {

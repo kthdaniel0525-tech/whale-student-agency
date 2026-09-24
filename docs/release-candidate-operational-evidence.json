@@ -6,7 +6,7 @@
   "gates": {
     "hostedStaging": {
       "status": "FAIL",
-      "reason": "No production-like hosted staging target, credentials, data services, workers, schedules, or monitoring recipients are available. The inspected legacy Sites deployment uses source daf620b69cb044ed8045effece805ac88c6b2fa5 and has no runtime environment entries, D1, or R2 bindings, so it is not candidate evidence."
+      "reason": "No production-like hosted staging target, credentials, data services, workers, schedules, or monitoring recipients are available for the candidate."
     },
     "realAIQuality": {
       "status": "FAIL",

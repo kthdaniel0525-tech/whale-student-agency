@@ -102,7 +102,7 @@ Reviewed against the application schema and server configuration on 2026-09-23. 
 - **Sentry (when configured):** server error metadata only, filtered by `server/operations/monitoring.ts`; request objects, user identity, cookies, headers, raw messages, prompts, source text and arbitrary contexts are removed. Deployment operators must provision the project, access controls, retention and alert recipients. No live Sentry delivery is established by the repository tests.
 - **Hugging Face model distribution:** pinned `Xenova/all-MiniLM-L6-v2` model assets may be downloaded only when `EMBEDDING_ALLOW_DOWNLOAD=true`; default inference uses the local cache. This asset download is not a hosted embedding request and does not send user text to a Hugging Face inference endpoint.
 - **PostgreSQL 17 / pgvector and pg-boss:** local Compose configuration is present. Database hosting, disk storage, backups, log aggregation and production region/vendor are deployment choices not established by repository defaults. Better Auth, Prisma, pg-boss and document parsers execute in the application/worker environment.
-- **No production LMS institution, external notification vendor or additional AI provider is registered.** Legacy Cloudflare/D1/build artifacts and `.openai` project metadata do not establish those systems as the current PostgreSQL student platform's production processors.
+- **No production LMS institution, external notification vendor or additional AI provider is registered.** Only providers configured for the deployed Student Agency environment are processors; repository examples do not establish a production connection.
 
 ## Deletion and retention review
 

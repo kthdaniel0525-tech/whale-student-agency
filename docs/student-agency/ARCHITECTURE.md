@@ -6,9 +6,9 @@ Status: architecture and schema scaffold only. No student runtime, database migr
 
 ## Existing repository
 
-The working tree was clean at inspection. `app/page.tsx` implements a Korean code-review workspace. `lib/analysis.ts` performs local rule-based analysis; `app/api/analyze` and `app/api/connection` call Gemini using a key supplied by the browser. React 19, Next.js 16, TypeScript strict mode, Tailwind 4, Zod and shadcn components are installed. The actual development/build runtime is Vinext/Vite and Cloudflare Workers, not the standard Next.js Node server. `db/schema.ts` is empty; Drizzle is installed, but the Sites manifest declares no D1/R2 bindings. `app/chatgpt-auth.ts` provides optional platform authentication helpers. There is no student persistence, RAG, orchestration, or learning system.
+This archived proposal predates the implemented application. The current repository is a dedicated Next.js Node application using React, TypeScript, Tailwind/shadcn, PostgreSQL with pgvector, Prisma, Better Auth, AIProvider, RAG, Agents, Workflows, Learning Intelligence, planning, notifications, and production Docker operations.
 
-Preserve the existing application during Phase 1. Do not reuse its browser-supplied API key pattern for student features. Introduce student routes under `/student` in Phase 2; decide the final root route during product migration.
+The implemented product now redirects `/` to `/student`. Provider credentials remain server-side and all personal data paths derive ownership from the authenticated session.
 
 ## Proposed architecture
 
@@ -16,12 +16,12 @@ Use a modular monolith: Next.js routes and React components call authenticated a
 
 Request flow: authenticated user → validated request → ownership-scoped repositories → ContextBuilder → AgentRouter → AgentExecutor → AIProvider / ToolRegistry → persisted run and result. Durable workflow steps invoke these same services. UI must never import database clients or AI credentials.
 
-Preferred production stack: Next.js, React, TypeScript, Tailwind/shadcn, PostgreSQL with pgvector, Prisma, Supabase Auth and private Supabase Storage, OpenAI behind AIProvider, Zod, Vitest and Playwright. Keep the present runtime untouched until the Phase 2 compatibility spike. Sites disallows raw TCP; a Prisma deployment here needs an HTTP-compatible database transport, such as a verified Prisma Accelerate integration, or a separate Node backend. Conventional Next.js Node hosting is the fallback for the preferred direct PostgreSQL architecture. Do not silently substitute D1 for vector-capable PostgreSQL or replace the existing hosting manifest.
+Implemented production stack: Next.js, React, TypeScript, Tailwind/shadcn, PostgreSQL with pgvector, Prisma, Better Auth, OpenAI behind AIProvider, Zod, Vitest and Playwright. The supported deployment uses the checked-in Docker/Compose Node runtime with private persistent document storage and separate background workers.
 
 ## Folder structure
 
 ```text
-app/                         Existing application; future student routes/API adapters
+app/                         Student Agency routes and API adapters
 components/ui/               Existing shared accessible primitives
 features/student/            Student UI composition and form schemas
 server/
@@ -71,7 +71,7 @@ Desktop-first neutral surfaces with a restrained blue accent, legible typography
 
 ## Packages and configuration
 
-Already installed: React, Next.js, TypeScript, Tailwind, shadcn primitives, Zod. Add in Phase 2 after runtime spike: matching pinned `prisma` and `@prisma/client`, `@supabase/supabase-js`, `@supabase/ssr`, `server-only`, `vitest`, `@playwright/test`. If retaining Sites, add the verified HTTP Prisma adapter/extension; use a PostgreSQL Node adapter only on Node hosting. Phase 4: `pdfjs-dist` in a compatible extraction worker, optionally `mammoth` for DOCX. Phase 5: `openai`. Do not install all future-phase packages now. The current schema deliberately uses Prisma 6 configuration syntax; verify and migrate configuration if selecting a newer major rather than installing an unpinned latest version.
+The implemented application pins its Next.js, React, Prisma, PostgreSQL, pgvector, Better Auth, OpenAI, PDF extraction, Vitest and Playwright dependencies in `package.json` and `package-lock.json`. Add or upgrade packages only through reviewed compatibility changes.
 
 See `environment.example` for placeholder variables. No real credentials were read or created. Only Supabase URL and publishable key may be public. Provider names, embedding model and dimensions must be explicitly configured and validated server-side.
 

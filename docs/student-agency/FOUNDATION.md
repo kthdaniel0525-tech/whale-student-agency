@@ -12,13 +12,13 @@ New accounts enter onboarding for name, school, program, year, semester, academi
 
 The dashboard reads the database for courses, unfinished assignments, upcoming exams and earliest deadline priorities. It shows honest empty states for new accounts. Course detail supports course editing/deletion, assignment creation/editing/completion/reopening/deletion, and exam creation/editing/deletion. Course deletion cascades through its assignments and exams. Profile settings persist across reloads. There are responsive navigation, light/dark themes, validation messages, busy states, error boundaries, success notifications and deletion confirmation dialogs.
 
-AI Assistant, Study Plan, Documents, Progress and Career have explanatory placeholders. The AI Recommendations and AI Memory sections explicitly state that those features are unavailable. No synthetic student data is seeded into normal accounts. The former code-review app remains at `/code-review`; its Gemini integration is legacy code, not part of Student Agency.
+AI Assistant, Study Plan, Documents, Progress and Career have explanatory placeholders. The AI Recommendations and AI Memory sections explicitly state that those features are unavailable. No synthetic student data is seeded into normal accounts.
 
 ## Runtime decision
 
 The student app now uses the existing Next.js package through its standard Node runtime. Prisma 7.10.0 uses `@prisma/adapter-pg` to connect to real PostgreSQL. Better Auth 1.7.3 provides complete email/password registration and database sessions without requiring a separate hosted identity account.
 
-The prior Sites/Vinext configuration and scripts are retained with `:sites` names as migration history. They are **not a supported deployment path for this new PostgreSQL application**: Sites does not support the raw TCP connection used by this adapter. No changes have been published to the existing hosted site. Production requires Node hosting plus PostgreSQL, or a separately verified HTTP-compatible database transport. Do not run the old Sites publishing flow against this foundation as though it were compatible.
+The application uses the supported Next.js Node runtime with PostgreSQL. Production requires a Node/Docker host, PostgreSQL with pgvector, private durable document storage, background workers, and the reviewed runtime configuration.
 
 ## File organization
 
