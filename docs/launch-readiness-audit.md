@@ -80,7 +80,7 @@ Timeout/rate-limit/outage, equivalent fallback, no-valid-fallback, stream-start/
 
 ### Operational controls and recovery
 
-AI/provider/model/feature/background kill switches, integration vetoes, checkout-only pause and beta cohort vetoes have automated boundary coverage. They govern new admissions; they do not recall in-flight requests. Legacy AI routes require separate ingress containment. `BACKGROUND_JOB_SCHEDULE_ENABLED=false` does not remove persisted schedules or stop queued work; stop affected workers and manage schedules explicitly. See [exact controls and incident runbooks](security-privacy-audit.md#exact-emergency-controls).
+AI/provider/model/feature/background kill switches, integration vetoes, checkout-only pause and beta cohort vetoes have automated boundary coverage. They govern new admissions; they do not recall in-flight requests. The former standalone CodeChoiceAI analyze/connection routes are absent from this repository. `BACKGROUND_JOB_SCHEDULE_ENABLED=false` does not remove persisted schedules or stop queued work; stop affected workers and manage schedules explicitly. See [exact controls and incident runbooks](security-privacy-audit.md#exact-emergency-controls).
 
 The rollback runbook now calls out that pre-beta `e1f5239` lacks beta authorization/cohort checks. Additive schema compatibility alone does not make it safe. No actual staging rollback was executed. Require an exact approved image/configuration, revoked/non-invited/paid-pilot access tests, privacy settings and old-job compatibility before approval.
 

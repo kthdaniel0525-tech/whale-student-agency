@@ -15,7 +15,7 @@ are documented in [`docs/notifications.md`](docs/notifications.md).
 User-facing reminder, notification, quiet-hour and proactive recommendation controls
 are documented in [`docs/notification-settings.md`](docs/notification-settings.md).
 
-A student workspace with authentication, onboarding, courses, assignments, exams, settings, private document uploads and semantic search with document/page citations. Built with Next.js, PostgreSQL + pgvector, Prisma and Better Auth. Documents use local neural embeddings; AI chat and agents are deferred.
+A student workspace with authentication, onboarding, courses, assignments, exams, private document retrieval, AI tutoring, quizzes, learning intelligence, study planning, academic workflows, career support, personalization, proactive recommendations and operational AI controls. Built with Next.js, PostgreSQL + pgvector, Prisma and Better Auth. Documents use local neural embeddings, while provider-backed features run through the server-side AI provider and model-routing layers.
 
 ## Run locally
 
