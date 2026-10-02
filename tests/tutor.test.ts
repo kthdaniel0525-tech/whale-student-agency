@@ -40,10 +40,16 @@ let beginner: Actor;
 let advanced: Actor;
 let courseId: string;
 let documentId: string;
+let fallbackDocumentId: string;
+let unrelatedDocumentId: string;
+let deletedChunkDocumentId: string;
+let otherCourseId: string;
+let otherCourseDocumentId: string;
+let foreignDocumentId: string;
 
 const material =
   "Mathematical induction proves a proposition by establishing a base case. The inductive hypothesis assumes the proposition holds for an arbitrary k. The inductive step then proves it for k plus one.";
-const requirements = {
+const generalRequirements = {
   profile: true,
   course: true,
   documents: true,
@@ -53,6 +59,16 @@ const requirements = {
   memoryKeys: ["explanationStyle", "answerLength"],
   limits: { memories: 5 },
 };
+const requirements = {
+  ...generalRequirements,
+  selectedDocumentCoverage: true,
+};
+const fallbackMaterial =
+  "Mathematical induction starts with a base case, assumes P(k), and proves P(k+1). The controlled lecture contains exactly 23 violet markers and 8 gold markers.";
+const unrelatedMaterial =
+  "Photosynthesis uses chlorophyll to convert light energy. This selected material contains no launch code or spacecraft identifier.";
+const unselectedMaterial =
+  "UNSELECTED DISTRACTOR: another document contains 99 amber markers.";
 
 async function createActor(
   name: string,
@@ -92,12 +108,20 @@ async function createActor(
 }
 
 /** Generation is the sole replacement; auth, routing, execution, DB and RAG run. */
-function providerBoundary() {
-  const generate = vi.fn<AIProvider["generateText"]>().mockResolvedValue({
-    id: "tutor-provider-response",
-    text: "Tutor response supplied by the external model boundary.",
-    model: "tutor-test-model",
-  });
+type TextResponder = (
+  request: Parameters<AIProvider["generateText"]>[0],
+) => string;
+
+function providerBoundary(respond?: TextResponder) {
+  const generate = vi.fn<AIProvider["generateText"]>().mockImplementation(
+    async (request) => ({
+      id: "tutor-provider-response",
+      text: respond
+        ? respond(request)
+        : "Tutor response supplied by the external model boundary.",
+      model: "tutor-test-model",
+    }),
+  );
   const structured = vi.fn(
     async <T>(
       request: AIStructuredRequest<T>,
@@ -127,8 +151,8 @@ function providerBoundary() {
   return { generate, structured, getProvider };
 }
 
-function setup(instructions?: string) {
-  const ai = providerBoundary();
+function setup(instructions?: string, respond?: TextResponder) {
+  const ai = providerBoundary(respond);
   const service = createStudentAgentService({
     router: { getProvider: ai.getProvider },
     executor: {
@@ -138,6 +162,32 @@ function setup(instructions?: string) {
     },
   });
   return { ai, service };
+}
+
+async function createReadyDocument(
+  actor: Actor,
+  selectedCourseId: string,
+  title: string,
+  content: string,
+) {
+  const document = await db().document.create({
+    data: {
+      userId: actor.id,
+      courseId: selectedCourseId,
+      title,
+      originalFileName: title,
+      fileType: "TXT",
+      fileSize: content.length,
+      storageKey: randomUUID(),
+      processingStatus: "READY",
+      embeddingModel: embeddingProvider.id,
+      pageCount: 1,
+    },
+  });
+  const vector = JSON.stringify(await embeddingProvider.generateEmbedding(content));
+  await db()
+    .$executeRaw`INSERT INTO "DocumentChunk" (id,"documentId","userId","courseId","chunkIndex",content,"pageNumber","pageEnd","tokenCount",embedding,"embeddingModel",metadata) VALUES (${randomUUID()},${document.id},${actor.id},${selectedCourseId},0,${content},1,1,40,${vector}::vector,${embeddingProvider.id},'{}'::jsonb)`;
+  return document.id;
 }
 
 function messages(ai: ReturnType<typeof providerBoundary>) {
@@ -179,6 +229,59 @@ beforeAll(async () => {
   );
   await db()
     .$executeRaw`INSERT INTO "DocumentChunk" (id,"documentId","userId","courseId","chunkIndex",content,"pageNumber","pageEnd","tokenCount",embedding,"embeddingModel",metadata) VALUES (${randomUUID()},${documentId},${beginner.id},${courseId},0,${material},2,3,50,${vector}::vector,${embeddingProvider.id},'{}'::jsonb)`;
+  fallbackDocumentId = await createReadyDocument(
+    beginner,
+    courseId,
+    "Controlled markers.txt",
+    fallbackMaterial,
+  );
+  await createReadyDocument(
+    beginner,
+    courseId,
+    "Unselected distractor.txt",
+    unselectedMaterial,
+  );
+  unrelatedDocumentId = await createReadyDocument(
+    beginner,
+    courseId,
+    "Botany notes.txt",
+    unrelatedMaterial,
+  );
+  deletedChunkDocumentId = await createReadyDocument(
+    beginner,
+    courseId,
+    "Deleted chunk notes.txt",
+    "This chunk will be deleted before Tutor execution.",
+  );
+  const otherCourse = await db().course.create({
+    data: {
+      userId: beginner.id,
+      courseCode: "TUTOR BIO 1000",
+      courseName: "Biology",
+      semester: "Fall 2026",
+    },
+  });
+  otherCourseId = otherCourse.id;
+  otherCourseDocumentId = await createReadyDocument(
+    beginner,
+    otherCourseId,
+    "Other course.txt",
+    "A biology passage that must not enter mathematics context.",
+  );
+  const foreignCourse = await db().course.create({
+    data: {
+      userId: advanced.id,
+      courseCode: "PRIVATE 1000",
+      courseName: "Private course",
+      semester: "Fall 2026",
+    },
+  });
+  foreignDocumentId = await createReadyDocument(
+    advanced,
+    foreignCourse.id,
+    "Private notes.txt",
+    "PRIVATE OTHER STUDENT MATERIAL.",
+  );
 }, 30000);
 
 afterEach(() => vi.restoreAllMocks());
@@ -255,7 +358,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     expect(route).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(build).toHaveBeenCalledTimes(1);
-    expect(build.mock.calls[0][0]).toEqual({ request, options: requirements });
+    expect(build.mock.calls[0][0]).toEqual({ request, options: generalRequirements });
     const prompt = messages(ai);
     expect(prompt[0]).toMatchObject({ role: "system" });
     expect(prompt[0].content).toContain(TUTOR_INSTRUCTIONS);
@@ -267,6 +370,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
   it("passes actual course retrieval once and preserves the existing source metadata", async () => {
     const { ai, service } = setup();
     const retrieve = vi.spyOn(retrieval, "retrieveAcademicContext");
+    const fallback = vi.spyOn(retrieval, "selectedDocumentContext");
     const build = vi.spyOn(contextBuilder, "buildUserContext");
     const request = "Explain mathematical induction using my lecture notes";
     const result = await service.handleAgentRequest(
@@ -277,6 +381,7 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     if (!result.ok)
       throw new Error("Expected successful Tutor course execution.");
     expect(retrieve).toHaveBeenCalledTimes(1);
+    expect(fallback).not.toHaveBeenCalled();
     expect(retrieve).toHaveBeenCalledWith(beginner.id, {
       query: request,
       courseId,
@@ -314,6 +419,130 @@ describe.sequential("Tutor through the existing student Agent service", () => {
     });
     expect(ai.structured).toHaveBeenCalledTimes(1);
     expect(ai.getProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses bounded coverage for the exact selected document after a zero-result semantic search", async () => {
+    const retrieve = vi
+      .spyOn(retrieval, "retrieveAcademicContext")
+      .mockResolvedValueOnce([]);
+    const fallback = vi.spyOn(retrieval, "selectedDocumentContext");
+    const { ai, service } = setup(undefined, (request) => {
+      const prompt = request.messages.map((message) => message.content).join("\n");
+      expect(prompt).toContain(fallbackMaterial);
+      expect(prompt).not.toContain(unselectedMaterial);
+      return "The selected lecture states exactly 23 violet markers and 8 gold markers.";
+    });
+    const request =
+      "Using only the selected lecture, explain induction and report the exact controlled marker counts with a citation.";
+    const result = await service.handleAgentRequest(
+      {
+        request,
+        courseId,
+        documentIds: [fallbackDocumentId],
+        preferredAgentId: "tutor",
+      },
+      beginner.headers,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        content:
+          "The selected lecture states exactly 23 violet markers and 8 gold markers.",
+        sources: [
+          {
+            documentId: fallbackDocumentId,
+            documentTitle: "Controlled markers.txt",
+            courseId,
+            chunkIndex: 0,
+          },
+        ],
+      },
+    });
+    if (!result.ok) throw new Error("Expected selected-document fallback success.");
+    expect(result.response.sources).toHaveLength(1);
+    expect(new Set(result.response.sources.map((source) => `${source.documentId}:${source.chunkIndex}`)).size).toBe(1);
+    expect(result.response.content).not.toMatch(/\[(?:source|document|chunk)[:# ]/i);
+    expect(retrieve).toHaveBeenCalledTimes(1);
+    expect(retrieve).toHaveBeenCalledWith(beginner.id, {
+      query: request,
+      courseId,
+      documentIds: [fallbackDocumentId],
+      maxResults: 5,
+    });
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(fallback).toHaveBeenCalledWith(beginner.id, fallbackDocumentId, 5);
+    expect(ai.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects foreign and cross-course selected documents before fallback or generation", async () => {
+    for (const input of [
+      { courseId, documentIds: [foreignDocumentId] },
+      { courseId, documentIds: [otherCourseDocumentId] },
+    ]) {
+      const { ai, service } = setup();
+      const fallback = vi.spyOn(retrieval, "selectedDocumentContext");
+      const result = await service.handleAgentRequest(
+        {
+          request: "Explain the selected document.",
+          preferredAgentId: "tutor",
+          ...input,
+        },
+        beginner.headers,
+      );
+      expect(result).toMatchObject({ ok: false, error: { code: "CONTEXT_FAILURE" } });
+      expect(fallback).not.toHaveBeenCalled();
+      expect(ai.generate).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("reports insufficient evidence when bounded selected passages lack the requested fact", async () => {
+    vi.spyOn(retrieval, "retrieveAcademicContext").mockResolvedValueOnce([]);
+    const { ai, service } = setup(undefined, (request) => {
+      const prompt = request.messages.map((message) => message.content).join("\n");
+      expect(prompt).toContain(unrelatedMaterial);
+      expect(prompt).toMatch(/insufficient evidence/i);
+      return "The selected material does not provide enough evidence to identify a launch code.";
+    });
+    const result = await service.handleAgentRequest(
+      {
+        request: "What is the spacecraft launch code?",
+        courseId,
+        documentIds: [unrelatedDocumentId],
+        preferredAgentId: "tutor",
+      },
+      beginner.headers,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        content:
+          "The selected material does not provide enough evidence to identify a launch code.",
+        sources: [{ documentId: unrelatedDocumentId, chunkIndex: 0 }],
+      },
+    });
+    expect(ai.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never generates from deleted selected-document chunks", async () => {
+    await db().documentChunk.deleteMany({
+      where: { documentId: deletedChunkDocumentId },
+    });
+    const { ai, service } = setup();
+    const result = await service.handleAgentRequest(
+      {
+        request: "Explain the deleted passage.",
+        courseId,
+        documentIds: [deletedChunkDocumentId],
+        preferredAgentId: "tutor",
+      },
+      beginner.headers,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "SOURCE_CONTEXT_UNAVAILABLE" },
+    });
+    expect(ai.generate).not.toHaveBeenCalled();
   });
 
   it("passes the real beginner profile with instructions for accessible explanations", async () => {

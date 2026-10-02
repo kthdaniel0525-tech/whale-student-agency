@@ -17,6 +17,7 @@ const definition: Agent = {
     profile: true,
     course: true,
     documents: true,
+    selectedDocumentCoverage: true,
     learning: true,
     memories: true,
     memoryCategories: ["preference", "learning-pattern", "successful-strategy"],

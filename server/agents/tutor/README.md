@@ -62,6 +62,13 @@ Sources describe the material supplied to the model; they do not independently
 verify every generated claim. Tutor instructions permit only supplied source titles
 and pages and never contain fabricated document/page examples.
 
+An explicitly selected document keeps the normal semantic threshold first. If that
+document-scoped search has no usable result, Context Builder uses its existing
+bounded document-order coverage fallback for that owned document only. General
+library/course retrieval keeps the normal threshold. A selected READY document
+with no chunks fails before generation, and Tutor is instructed to report
+insufficient evidence when the bounded passages do not support the requested fact.
+
 Other agents are configured separately through the same Student setup. Conversation
 continuity is provided by the shared Executor layer; this Tutor module adds no
 agent-specific history store, chat UI, workflows, or model configuration.

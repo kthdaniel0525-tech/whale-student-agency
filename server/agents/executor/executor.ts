@@ -154,6 +154,27 @@ function mergeContextOptions(
   };
 }
 
+function resolveContextOptions(
+  base: Readonly<ContextOptions>,
+  overrides: Readonly<ContextOptions> | undefined,
+  documentIds: readonly string[] | undefined,
+): ContextOptions {
+  const options = mergeContextOptions(base, overrides);
+  if (!options.selectedDocumentCoverage) return options;
+  if (!documentIds?.length) {
+    const withoutCoverage = { ...options };
+    delete withoutCoverage.selectedDocumentCoverage;
+    return withoutCoverage;
+  }
+  return {
+    ...options,
+    limits: {
+      ...options.limits,
+      documents: Math.max(documentIds.length, options.limits?.documents ?? 5),
+    },
+  };
+}
+
 /** Executes one selected agent. No routing, direct data queries, tools or workflows. */
 export class AgentExecutor<Extension extends string = never> {
   readonly #contextCache: AgentExecutorOptions["contextCache"];
@@ -358,9 +379,10 @@ export class AgentExecutor<Extension extends string = never> {
       ...(assignmentId !== undefined ? { assignmentId } : {}),
       ...(projectIds !== undefined ? { projectIds } : {}),
       ...(documentIds !== undefined ? { documentIds } : {}),
-      options: mergeContextOptions(
+      options: resolveContextOptions(
         agent.contextRequirements,
         preparation?.contextOverrides,
+        documentIds,
       ),
     };
     let context: UserContext;
@@ -374,6 +396,14 @@ export class AgentExecutor<Extension extends string = never> {
       throw new AgentExecutionError(
         error instanceof ContextError ? error.code : "CONTEXT_FAILURE",
       );
+    }
+    if (
+      agent.id === "tutor" &&
+      documentIds?.length &&
+      contextRequest.options?.selectedDocumentCoverage &&
+      !context.documents?.length
+    ) {
+      throw new AgentExecutionError("SOURCE_CONTEXT_UNAVAILABLE");
     }
     let conversationContext: ConversationContext | undefined;
     let conversationWrite: PreparedExecution<Extension>["conversationWrite"];
