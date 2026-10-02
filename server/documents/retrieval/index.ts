@@ -91,6 +91,42 @@ export async function retrieveAcademicContext(
   }
   return result;
 }
+
+/** Direct coverage for an explicitly selected owned document. This is used only
+ * after semantic retrieval returns no match; it does not change the global RAG
+ * similarity threshold or expand the query to other course materials. */
+export async function selectedDocumentContext(
+  userId: string,
+  documentId: string,
+  maxResults: number,
+): Promise<RetrievedChunk[]> {
+  const document = await getDocument(userId, documentId);
+  if (document.processingStatus !== "READY") return [];
+  const chunks = await db().documentChunk.findMany({
+    where: {
+      userId,
+      documentId,
+      document: { userId, processingStatus: "READY" },
+    },
+    orderBy: [{ chunkIndex: "asc" }, { id: "asc" }],
+    take: Math.max(1, Math.min(10, maxResults)),
+    select: {
+      id: true,
+      content: true,
+      chunkIndex: true,
+      pageNumber: true,
+      pageEnd: true,
+    },
+  });
+  return chunks.map((chunk) => ({
+    ...chunk,
+    documentId: document.id,
+    documentTitle: document.title,
+    courseId: document.courseId,
+    courseCode: document.course?.courseCode ?? null,
+    similarityScore: 0,
+  }));
+}
 export async function documentSections(
   userId: string,
   documentId: string,

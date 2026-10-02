@@ -44,17 +44,30 @@ export function selectQuizSettings(
   input: z.output<typeof quizGenerationRequestSchema>,
 ) {
   const lower = input.request.toLowerCase();
-  const countMatch = lower.match(/\b(\d+)\s+(?:practice\s+)?questions?\b/);
-  const inferredCount = countMatch ? Number(countMatch[1]) : 5;
+  const countWords: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+    fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+    nineteen: 19, twenty: 20,
+  };
+  const countMatch = lower.match(
+    /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)[ -]+(?:practice[ -]+)?questions?\b/,
+  );
+  const inferredCount = countMatch
+    ? Number.isFinite(Number(countMatch[1]))
+      ? Number(countMatch[1])
+      : countWords[countMatch[1]]
+    : 5;
   const count = input.count ?? inferredCount;
   if (!Number.isInteger(count) || count < 1 || count > 20) return undefined;
 
   let questionType: QuizQuestionRequestKind = "mixed";
-  if (/multiple[ -]choice/.test(lower)) questionType = "multiple-choice";
+  if (/\bmixed\b/.test(lower)) questionType = "mixed";
+  else if (/multiple[ -]choice/.test(lower)) questionType = "multiple-choice";
   else if (/true[ /-]false/.test(lower)) questionType = "true-false";
   else if (/short[ -]answer/.test(lower)) questionType = "short-answer";
   else if (/long[ -]answer|essay/.test(lower)) questionType = "long-answer";
-  else if (/\bmixed\b/.test(lower)) questionType = "mixed";
   questionType = input.questionType ?? questionType;
 
   let difficulty: QuizDifficulty | "adaptive" = "medium";

@@ -241,6 +241,37 @@ afterAll(async () => {
 });
 
 describe.sequential("Conversation persistence and compression", () => {
+  it("persists bounded source and presentation metadata without widening arbitrary metadata", async () => {
+    const conversation = await createConversation({ courseId }, owner.headers);
+    const sourceRefs = JSON.stringify(Array.from({ length: 8 }, (_, index) => ({
+      documentId: `document-${index}`,
+      documentTitle: `Synthetic lecture source ${index}`,
+      chunkIndex: index,
+      pageNumber: index + 1,
+      courseCode: "MATH 1240",
+    })));
+    const presentationData = JSON.stringify({
+      title: "Synthetic notes",
+      notes: "x".repeat(2_000),
+    });
+    expect(sourceRefs.length).toBeGreaterThan(500);
+    const message = await appendConversationMessage({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: "Source-grounded synthetic answer.",
+      agentId: "notes",
+      metadata: { workspaceVisible: true, sourceRefs, presentationData },
+    }, owner.headers, { embeddingProvider: null });
+    expect(message.metadata).toMatchObject({ sourceRefs, presentationData });
+    await expect(appendConversationMessage({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: "Invalid oversized generic metadata.",
+      agentId: "notes",
+      metadata: { arbitrary: "x".repeat(501) },
+    }, owner.headers, { embeddingProvider: null })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
   it("persists ordered roles and agent metadata, derives a title, and enforces ownership", async () => {
     const conversation = await createConversation({ courseId }, owner.headers);
     const first = await appendConversationMessage(

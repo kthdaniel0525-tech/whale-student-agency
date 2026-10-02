@@ -152,7 +152,6 @@ function providerBoundary() {
         data = {
           summary:
             "Prioritize induction practice, then follow the current exam plan.",
-          recommendedActions: null,
         };
       } else if (request.schemaName.startsWith("study_plan")) {
         const brief = params as unknown as PlanningBrief;

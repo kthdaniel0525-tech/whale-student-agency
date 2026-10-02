@@ -59,8 +59,7 @@ function boundary() {
     async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
       calls.push(request as AIStructuredRequest<unknown>);
       if (request.schemaName !== "academic_manager") throw new Error("No specialist execution or routing generation expected.");
-      const params = JSON.parse(request.messages[0].content.split("\n").at(-1)!) as { candidates: { candidateId: string; agentId: string | null }[] };
-      const data = invalid ?? { summary: "Address overdue work first, then review the upcoming exam's weak topics.", recommendedActions: params.candidates.slice(0, 2) };
+      const data = invalid ?? { summary: "Address overdue work first, then review the upcoming exam's weak topics." };
       return { id: "manager-response", model: "manager-fixture", text: JSON.stringify(data), data: data as T };
     },
     generateText() { throw new Error("Manager must use structured execution."); },
@@ -205,24 +204,20 @@ describe.sequential("Academic Manager using real auth, context, learning and pla
   });
   it.each([
     { summary: "Overview", recommendedActions: [{ candidateId: "made-up", agentId: "invented-agent" }] },
-    { summary: "Overview", recommendedActions: [{ candidateId: "made-up", agentId: "tutor" }] },
-    { summary: "Overview", recommendedActions: [], readinessScore: 100 },
-    { summary: "", recommendedActions: [] },
+    { summary: "Overview", readinessScore: 100 },
+    { summary: "" },
+    { summary: "x".repeat(1801) },
   ])("rejects invalid structured output %#", async (invalid) => {
     const ai = boundary(); ai.setInvalid(invalid);
     const result = await ai.service.handleAgentRequest({ request: "Give me an academic overview" }, owner.headers);
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });
-  it("handles omitted recommendations with the deterministic next action", async () => {
-    const ai = boundary(); ai.setInvalid({ summary: "Check the most urgent work.", recommendedActions: null });
+  it("uses deterministic ranked actions when the provider returns interpretation text only", async () => {
+    const ai = boundary(); ai.setInvalid({ summary: "Check the most urgent work." });
     const result = unwrap(await ai.service.handleAgentRequest({ request: "What should I do today?" }, owner.headers));
-    expect(result.recommendedActions).toHaveLength(1);
-  });
-  it("rejects a registered specialist paired with the wrong real action", async () => {
-    const ai = boundary();
-    ai.setInvalid({ summary: "Use the quiz agent.", recommendedActions: [{ candidateId: `exam:${mathExam}`, agentId: "quiz" }] });
-    const result = await ai.service.handleAgentRequest({ request: "Academic overview" }, owner.headers);
-    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
+    expect(result.recommendedActions.length).toBeGreaterThan(0);
+    expect(result.recommendedActions.length).toBeLessThanOrEqual(2);
+    expect(result.nextBestAction).toEqual(result.recommendedActions[0]);
   });
   it("does not expose unregistered specialists from a smaller registry", async () => {
     const registry = new AgentRegistry(); registry.register(getAcademicManagerAgentDefinition());

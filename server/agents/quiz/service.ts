@@ -160,6 +160,20 @@ export class QuizAgentService {
     const contextRequest = parsed.data.topic
       ? `${parsed.data.request}\nTopic: ${parsed.data.topic}`
       : parsed.data.request;
+    const selectedDocumentCoverage = parsed.data.documentIds?.length &&
+      parsed.data.documentIds.length <= 10
+      ? {
+          ...support?.contextOverrides,
+          selectedDocumentCoverage: true,
+          limits: {
+            ...support?.contextOverrides?.limits,
+            documents: Math.max(
+              parsed.data.documentIds.length,
+              support?.contextOverrides?.limits?.documents ?? 5,
+            ),
+          },
+        }
+      : support?.contextOverrides;
     let execution;
     try {
       execution = await this.#executor.executeStructured(
@@ -175,6 +189,9 @@ export class QuizAgentService {
         headers,
         {
           ...support,
+          ...(selectedDocumentCoverage
+            ? { contextOverrides: selectedDocumentCoverage }
+            : {}),
           schemaName: "quiz_generation",
           schema,
           buildDirective: (_context, personalization, adaptiveStrategy) => {

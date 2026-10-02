@@ -34,8 +34,8 @@ export function academicManagerMode(request: string): "now" | "overview" {
   return /\b(?:right now|today|do now|study next|next best action)\b/i.test(request) ? "now" : "overview";
 }
 
-/** One generic Executor call. Numeric evidence and allowed recommendations are
- * server-owned; the provider generates interpretation text and selects references. */
+/** One generic Executor call. Numeric evidence, priority ordering, and allowed
+ * recommendations are server-owned; the provider generates interpretation text. */
 export const executeAcademicManager: AgentExecutionHandler = async (
   input, headers, executor, registry,
 ) => {
@@ -56,23 +56,7 @@ export const executeAcademicManager: AgentExecutionHandler = async (
   let adaptive: AdaptiveStrategy | undefined;
   const schema = z.object({
     summary: z.string().trim().min(1).max(mode === "now" ? 500 : 1800),
-    recommendedActions: z.array(z.object({
-      candidateId: z.string().min(1).max(160),
-      agentId: z.string().nullable(),
-    }).strict()).max(maximumActions).nullable(),
-  }).strict().superRefine((value, ctx) => {
-    const recommendations = value.recommendedActions ?? [];
-    if (new Set(recommendations.map((action) => action.candidateId)).size !== recommendations.length) {
-      ctx.addIssue({ code: "custom", message: "Recommendations must be distinct." });
-    }
-    for (const action of recommendations) {
-      const candidate = candidates.find((item) => item.id === action.candidateId);
-      if (!candidate || candidate.agentId !== action.agentId ||
-        (action.agentId !== null && !registeredSpecialists.includes(action.agentId as typeof registeredSpecialists[number]))) {
-        ctx.addIssue({ code: "custom", message: "Select only a supplied action and its registered specialist." });
-      }
-    }
-  });
+  }).strict();
   const execution = await executor.executeStructured(input, headers, {
     schemaName: "academic_manager",
     schema,
@@ -118,20 +102,18 @@ export const executeAcademicManager: AgentExecutionHandler = async (
             ? item.suggestedAgent : null,
         })),
       };
-      // Full snapshot remains in the reference message. Only bounded IDs and
-      // execution controls are elevated to parameters, never user-authored text.
+      // Full snapshot and ranked candidates remain in the reference message.
+      // The provider interprets that evidence; deterministic code below retains
+      // ownership of the actual action selection.
       return ACADEMIC_MANAGER_INSTRUCTIONS + "\n" + JSON.stringify({
-        mode, maximumActions,
-        candidates: candidates.map((action) => ({ candidateId: action.id, agentId: action.agentId })),
+        mode,
+        maximumActions,
+        topCandidateIds: candidates.slice(0, maximumActions).map((action) => action.id),
       });
     },
   });
   if (!snapshot || !execution.structuredData || !candidates[0]) throw new AIError("INVALID_RESPONSE");
-  const selected = execution.structuredData.recommendedActions ?? [];
-  // Always retain the deterministic highest-value action, even if prose omits it.
-  const recommendedActions = [candidates[0], ...selected.map((action) => candidates.find((item) => item.id === action.candidateId)!) ]
-    .filter((action, index, all) => all.findIndex((item) => item.id === action.id) === index)
-    .slice(0, maximumActions);
+  const recommendedActions = candidates.slice(0, maximumActions);
   const result: AcademicManagerResponse = {
     summary: execution.structuredData.summary,
     mode, overallStatus: snapshot.overallStatus,

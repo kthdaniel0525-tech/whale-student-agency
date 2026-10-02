@@ -14,7 +14,7 @@ import {
 } from "@/server/recommendations";
 import { createStudentAgentService } from "@/server/agents/student-service";
 import type { AcademicManagerResponse } from "@/server/agents/academic-manager";
-import type { AIProvider, AIStructuredRequest } from "@/server/ai/types";
+import type { AIProvider } from "@/server/ai/types";
 import * as ai from "@/server/ai";
 
 const DAY = 86_400_000;
@@ -331,9 +331,8 @@ describe.sequential("Proactive Recommendation Engine", () => {
     const math = await course();
     await assignment(math.id, { days: -1 });
     const provider: AIProvider = {
-      async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
-        const parameters = JSON.parse(request.messages[0].content.split("\n").at(-1)!) as { candidates: { candidateId: string; agentId: string | null }[] };
-        const data = { summary: "Address the overdue assignment first.", recommendedActions: parameters.candidates.slice(0, 1) };
+      async generateStructuredOutput<T>() {
+        const data = { summary: "Address the overdue assignment first." };
         return { id: "manager", model: "fixture", text: JSON.stringify(data), data: data as T };
       },
       generateText() { throw new Error("No text boundary expected."); },

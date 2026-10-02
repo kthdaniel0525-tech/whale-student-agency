@@ -149,6 +149,7 @@ export function parseSources(value: unknown): AssistantSource[] {
         chunkIndex: source.chunkIndex,
         ...(typeof source.pageNumber === "number" || source.pageNumber === null ? { pageNumber: source.pageNumber as number | null } : {}),
         ...(typeof source.pageEnd === "number" || source.pageEnd === null ? { pageEnd: source.pageEnd as number | null } : {}),
+        ...(typeof source.courseId === "string" || source.courseId === null ? { courseId: source.courseId as string | null } : {}),
         ...(typeof source.courseCode === "string" || source.courseCode === null ? { courseCode: source.courseCode as string | null } : {}),
       }];
     });

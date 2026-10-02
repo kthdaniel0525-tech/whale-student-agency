@@ -273,6 +273,7 @@ describe.sequential("Quiz Agent definition and generation", () => {
     "Quiz me on mathematical induction",
     "Give me 10 practice questions",
     "Make multiple-choice questions from Lecture 5",
+    "Create a four-question mixed quiz from the selected lecture",
     "Give me short-answer questions",
     "Test me on recursion",
     "Make the questions harder",
@@ -285,6 +286,32 @@ describe.sequential("Quiz Agent definition and generation", () => {
       getProvider: setup().getProvider,
     }).routeAgent({ request });
     expect(route.agentId).toBe("quiz");
+  });
+
+  it("recognizes the hosted mixed-quiz request without a routing fallback and preserves its settings", async () => {
+    const topicName = `Hosted mixed routing ${randomUUID()}`;
+    const generated = mixedQuizData(4);
+    generated.topic = topicName;
+    for (const item of generated.questions) item.topics = [topicName];
+    const boundary = setup(generated);
+    const request = "Create a four-question mixed quiz from the selected lecture with multiple-choice, true/false, and short-answer questions at mixed difficulty.";
+    let quizId: string | undefined;
+    try {
+      const result = await boundary.service.generateQuiz(
+        { request, courseId, documentIds: [documentId] },
+        owner.headers,
+      );
+      quizId = result.id;
+      expect(result.questions).toHaveLength(4);
+      expect(new Set(result.questions.map((item) => item.type)).size).toBeGreaterThan(1);
+      expect(boundary.structured.mock.calls.map(([input]) => input.schemaName)).toEqual(["quiz_generation"]);
+      const prompt = boundary.structured.mock.calls[0][0].messages[0].content;
+      expect(prompt).toContain('"count":4');
+      expect(prompt).toContain('"questionType":"mixed"');
+    } finally {
+      if (quizId) await db().quiz.deleteMany({ where: { id: quizId, userId: owner.id } });
+      await db().learningTopic.deleteMany({ where: { userId: owner.id, courseId, name: topicName } });
+    }
   });
 
   it("generates validated multiple-choice questions, stores answers, and hides them publicly", async () => {

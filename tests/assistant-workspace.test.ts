@@ -121,7 +121,7 @@ describe.sequential("Main AI workspace service", () => {
     expect(response.assistantMessage.metadata).toMatchObject({ artifactType: "quiz", artifactId: "quiz-one" });
   });
 
-  it("persists normalized Tutor actions, structured display data, and sources across reload", async () => {
+  it("persists a one-source RAG Tutor response, structured display data, and source ownership across reload", async () => {
     const source = { documentId: "doc-actions", documentTitle: "Proof Lecture", pageNumber: 4, pageEnd: 4, courseId, courseCode: "MATH 1240", chunkIndex: 0 };
     const response = await executeAssistantRequest({ request: "Explain induction.", turnId: "turn-rich-tutor", courseId }, owner.headers, {
       execute: async () => agentResult({ structuredData: { keyTakeaway: "The inductive step carries truth forward." }, sources: [source] }),
@@ -132,9 +132,49 @@ describe.sequential("Main AI workspace service", () => {
     expect(presentation).toMatchObject({
       mode: "agent",
       structuredData: { keyTakeaway: "The inductive step carries truth forward." },
-      sources: [{ documentId: "doc-actions", pageNumber: 4 }],
+      sources: [{ documentId: "doc-actions", pageNumber: 4, courseId }],
       actions: expect.arrayContaining([expect.objectContaining({ id: "tutor-check" })]),
     });
+  });
+
+  it("persists multiple sources across reload", async () => {
+    const sources = Array.from({ length: 8 }, (_, index) => ({
+      documentId: `doc-multi-${index}`,
+      documentTitle: `Lecture ${index + 1}`,
+      pageNumber: index + 1,
+      pageEnd: index + 1,
+      courseId,
+      courseCode: "MATH 1240",
+      chunkIndex: index,
+    }));
+    const response = await executeAssistantRequest({ request: "Compare these lectures.", turnId: "turn-multi-source", courseId }, owner.headers, {
+      execute: async () => agentResult({ sources }),
+    });
+    const loaded = await getAssistantConversation(response.conversation.id, owner.headers);
+    const persisted = loaded.messages.find((message) => message.role === "assistant")?.presentation?.sources;
+    expect(persisted).toHaveLength(8);
+    expect(persisted).toEqual(sources);
+  });
+
+  it("persists Notes sources and structured presentation data across reload", async () => {
+    const source = { documentId: "doc-notes", documentTitle: "Logic Lecture", pageNumber: 2, pageEnd: 3, courseId, courseCode: "MATH 1240", chunkIndex: 1 };
+    const response = await executeAssistantRequest({ request: "Make notes from this lecture.", turnId: "turn-notes-source", courseId }, owner.headers, {
+      execute: async () => agentResult({ targetId: "notes", content: "Logic notes", structuredData: { title: "Logic notes", topics: ["Logic"] }, sources: [source] }),
+    });
+    const loaded = await getAssistantConversation(response.conversation.id, owner.headers);
+    expect(loaded.messages.find((message) => message.role === "assistant")?.presentation).toMatchObject({
+      targetId: "notes",
+      structuredData: { title: "Logic notes", topics: ["Logic"] },
+      sources: [source],
+    });
+  });
+
+  it("persists and reloads a no-source response without inventing source metadata", async () => {
+    const response = await executeAssistantRequest({ request: "Explain a general study strategy.", turnId: "turn-no-source", courseId }, owner.headers, {
+      execute: async () => agentResult({ content: "Use retrieval practice.", sources: [] }),
+    });
+    const loaded = await getAssistantConversation(response.conversation.id, owner.headers);
+    expect(loaded.messages.find((message) => message.role === "assistant")?.presentation?.sources).toBeUndefined();
   });
 
   it("reconstructs persisted Quiz answers without revealing unattempted answers", async () => {

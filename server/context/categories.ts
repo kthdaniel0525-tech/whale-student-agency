@@ -1,7 +1,7 @@
 import "server-only";
 import { db } from "@/server/db/client";
 import { NotFoundError } from "@/server/services/academic";
-import { retrieveAcademicContext } from "@/server/documents/retrieval";
+import { retrieveAcademicContext, selectedDocumentContext } from "@/server/documents/retrieval";
 import { getLearningOverview } from "@/server/learning";
 import { retrieveRelevantMemories } from "@/server/memory";
 import type {
@@ -207,7 +207,14 @@ export async function documentContext({
   // Reuse the existing authorized RAG service, reserving slots so one large
   // document cannot crowd out the other explicitly selected lecture materials.
   const rows = selected?.length
-    ? (await Promise.all(selected.map((id, i) => retrieve([id], Math.floor(input.options.limits.documents / selected.length) + (i < input.options.limits.documents % selected.length ? 1 : 0))))).flat()
+    ? (await Promise.all(selected.map(async (id, i) => {
+        const limit = Math.floor(input.options.limits.documents / selected.length) +
+          (i < input.options.limits.documents % selected.length ? 1 : 0);
+        const semantic = await retrieve([id], limit);
+        return semantic.length
+          ? semantic
+          : selectedDocumentContext(userId, id, limit);
+      }))).flat()
     : await retrieve(input.documentIds, input.options.limits.documents);
   return rows.map((row) => ({
     content: clip(row.content, 3500),

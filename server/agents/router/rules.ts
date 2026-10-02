@@ -16,7 +16,7 @@ const rules: readonly { agentId: StudentAgentId; pattern: RegExp }[] = [
   {
     agentId: "quiz",
     pattern:
-      /\b(?:quiz me|(?:make|create|generate)(?: me)? (?:a )?quiz|practice questions|test me|generate questions|multiple[ -]choice questions|short[ -]answer questions|long[ -]answer questions|check my answer|why (?:(?:is|was) my answer wrong|my answer (?:is|was) wrong)|make (?:the )?questions harder)\b/,
+      /\b(?:quiz me|(?:make|create|generate)(?: me)?\s+(?:an?\s+)?(?:(?:[\w/]+(?:-[\w/]+)*)\s+){0,6}quiz|practice questions|test me|generate questions|multiple[ -]choice questions|short[ -]answer questions|long[ -]answer questions|check my answer|why (?:(?:is|was) my answer wrong|my answer (?:is|was) wrong)|make (?:the )?questions harder)\b/,
   },
   {
     agentId: "study-planner",
