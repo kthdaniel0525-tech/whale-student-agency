@@ -314,6 +314,33 @@ describe.sequential("Quiz Agent definition and generation", () => {
     }
   });
 
+  it("infers a written-question count when the type appears before questions", async () => {
+    const topicName = `Written count ${randomUUID()}`;
+    const generated = quizData(2, "short-answer");
+    generated.topic = topicName;
+    for (const item of generated.questions) item.topics = [topicName];
+    const boundary = setup(generated);
+    let quizId: string | undefined;
+    try {
+      const result = await boundary.service.generateQuiz(
+        {
+          request: "Create two short-answer questions on mathematical induction",
+          courseId,
+        },
+        owner.headers,
+      );
+      quizId = result.id;
+      expect(result.questions).toHaveLength(2);
+      expect(result.questions.every((item) => item.type === "short-answer" && item.choices === null)).toBe(true);
+      const prompt = boundary.structured.mock.calls.find(([input]) => input.schemaName === "quiz_generation")![0].messages[0].content;
+      expect(prompt).toContain('"count":2');
+      expect(prompt).toContain('"questionType":"short-answer"');
+    } finally {
+      if (quizId) await db().quiz.deleteMany({ where: { id: quizId, userId: owner.id } });
+      await db().learningTopic.deleteMany({ where: { userId: owner.id, courseId, name: topicName } });
+    }
+  });
+
   it("generates validated multiple-choice questions, stores answers, and hides them publicly", async () => {
     const boundary = setup(quizData(3, "multiple-choice", "hard"));
     const execute = vi.spyOn(AgentExecutor.prototype, "executeStructured");
