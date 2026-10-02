@@ -197,7 +197,9 @@ describe.sequential("Memory Architecture and Personalization Core", () => {
       [getCareerAgentDefinition(), "Help with my career", ["targetRole"], ["academicGoal", "quizDifficulty"]],
     ] as const;
     for (const [agent, request, included, excluded] of cases) {
-      const context = await buildUserContext({ request, options: agent.contextRequirements }, owner.headers);
+      const contextRequirements = { ...agent.contextRequirements };
+      delete contextRequirements.selectedDocumentCoverage;
+      const context = await buildUserContext({ request, options: contextRequirements }, owner.headers);
       const keys = context.memories?.map((memory) => memory.key) ?? [];
       for (const key of included) expect(keys, `${agent.id} includes ${key}`).toContain(key);
       for (const key of excluded) expect(keys, `${agent.id} excludes ${key}`).not.toContain(key);

@@ -226,10 +226,14 @@ describe.sequential(
           courseId,
         });
         expect(build).toHaveBeenCalledTimes(1);
+        const unselectedContextRequirements = {
+          ...agents.get(agentId).contextRequirements,
+        };
+        delete unselectedContextRequirements.selectedDocumentCoverage;
         expect(build.mock.calls[0][0]).toEqual({
           request,
           courseId,
-          options: agents.get(agentId).contextRequirements,
+          options: unselectedContextRequirements,
         });
         expect(ai.generate).toHaveBeenCalledTimes(1);
         expect(ai.structured).not.toHaveBeenCalled();

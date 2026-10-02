@@ -266,6 +266,7 @@ describe("student metadata and execution contracts", () => {
       const options: ContextOptions = agent.contextRequirements;
       expect(
         Object.entries(options)
+          .filter(([key]) => key !== "selectedDocumentCoverage")
           .filter(([, value]) => value === true)
           .map(([key]) => key)
           .sort(),
