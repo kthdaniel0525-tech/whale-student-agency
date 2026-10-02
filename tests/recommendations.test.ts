@@ -332,7 +332,7 @@ describe.sequential("Proactive Recommendation Engine", () => {
     await assignment(math.id, { days: -1 });
     const provider: AIProvider = {
       async generateStructuredOutput<T>() {
-        const data = { summary: "Address the overdue assignment first." };
+        const data = { summary: "Address the overdue assignment first.", recommendedActions: null };
         return { id: "manager", model: "fixture", text: JSON.stringify(data), data: data as T };
       },
       generateText() { throw new Error("No text boundary expected."); },

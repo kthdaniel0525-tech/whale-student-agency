@@ -59,7 +59,7 @@ function boundary() {
     async generateStructuredOutput<T>(request: AIStructuredRequest<T>) {
       calls.push(request as AIStructuredRequest<unknown>);
       if (request.schemaName !== "academic_manager") throw new Error("No specialist execution or routing generation expected.");
-      const data = invalid ?? { summary: "Address overdue work first, then review the upcoming exam's weak topics." };
+      const data = invalid ?? { summary: "Address overdue work first, then review the upcoming exam's weak topics.", recommendedActions: null };
       return { id: "manager-response", model: "manager-fixture", text: JSON.stringify(data), data: data as T };
     },
     generateText() { throw new Error("Manager must use structured execution."); },
@@ -204,16 +204,16 @@ describe.sequential("Academic Manager using real auth, context, learning and pla
   });
   it.each([
     { summary: "Overview", recommendedActions: [{ candidateId: "made-up", agentId: "invented-agent" }] },
-    { summary: "Overview", readinessScore: 100 },
-    { summary: "" },
-    { summary: "x".repeat(1801) },
+    { summary: "Overview", recommendedActions: null, readinessScore: 100 },
+    { summary: "", recommendedActions: null },
+    { summary: "x".repeat(1801), recommendedActions: null },
   ])("rejects invalid structured output %#", async (invalid) => {
     const ai = boundary(); ai.setInvalid(invalid);
     const result = await ai.service.handleAgentRequest({ request: "Give me an academic overview" }, owner.headers);
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });
   it("uses deterministic ranked actions when the provider returns interpretation text only", async () => {
-    const ai = boundary(); ai.setInvalid({ summary: "Check the most urgent work." });
+    const ai = boundary(); ai.setInvalid({ summary: "Check the most urgent work.", recommendedActions: null });
     const result = unwrap(await ai.service.handleAgentRequest({ request: "What should I do today?" }, owner.headers));
     expect(result.recommendedActions.length).toBeGreaterThan(0);
     expect(result.recommendedActions.length).toBeLessThanOrEqual(2);

@@ -71,7 +71,7 @@ function boundary(options: { fail?: string; code?: "PROVIDER_FAILURE" | "RATE_LI
       let data: unknown;
       if (request.schemaName === "academic_manager") {
         if (options.gate) await options.gate();
-        data = { summary: "Prioritize the upcoming exam and repair demonstrated weaknesses." };
+        data = { summary: "Prioritize the upcoming exam and repair demonstrated weaknesses.", recommendedActions: null };
       } else if (request.schemaName.startsWith("study_plan")) {
         const brief = JSON.parse(request.messages[0].content.split("Execution parameters: ")[1]) as PlanningBrief;
         const slot = brief.availability.find((a) => a.availableMinutes >= 15)!;

@@ -56,7 +56,23 @@ export const executeAcademicManager: AgentExecutionHandler = async (
   let adaptive: AdaptiveStrategy | undefined;
   const schema = z.object({
     summary: z.string().trim().min(1).max(mode === "now" ? 500 : 1800),
-  }).strict();
+    recommendedActions: z.array(z.object({
+      candidateId: z.string().min(1).max(160),
+      agentId: z.string().nullable(),
+    }).strict()).max(maximumActions).nullable(),
+  }).strict().superRefine((value, ctx) => {
+    const recommendations = value.recommendedActions ?? [];
+    if (new Set(recommendations.map((action) => action.candidateId)).size !== recommendations.length) {
+      ctx.addIssue({ code: "custom", message: "Recommendations must be distinct." });
+    }
+    for (const action of recommendations) {
+      const candidate = candidates.find((item) => item.id === action.candidateId);
+      if (!candidate || candidate.agentId !== action.agentId ||
+        (action.agentId !== null && !registeredSpecialists.includes(action.agentId as typeof registeredSpecialists[number]))) {
+        ctx.addIssue({ code: "custom", message: "Select only a supplied action and its registered specialist." });
+      }
+    }
+  });
   const execution = await executor.executeStructured(input, headers, {
     schemaName: "academic_manager",
     schema,
@@ -108,6 +124,7 @@ export const executeAcademicManager: AgentExecutionHandler = async (
       return ACADEMIC_MANAGER_INSTRUCTIONS + "\n" + JSON.stringify({
         mode,
         maximumActions,
+        candidates: candidates.map((action) => ({ candidateId: action.id, agentId: action.agentId })),
         topCandidateIds: candidates.slice(0, maximumActions).map((action) => action.id),
       });
     },
