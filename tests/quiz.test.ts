@@ -343,6 +343,8 @@ describe.sequential("Quiz Agent definition and generation", () => {
     expect(new Set(result.questions.map((item) => item.type)).size).toBeGreaterThan(1);
     const call = boundary.structured.mock.calls.find(([input]) => input.schemaName === "quiz_generation")![0];
     expect(call.messages[0].content).toContain(QUIZ_INSTRUCTIONS);
+    expect(call.messages[0].content).toContain("set choices to null for written answers");
+    expect(call.messages[0].content).not.toContain("omit choices for written answers");
     expect(call.messages[0].content).toContain('"count":5');
     expect(call.messages[0].content).toContain('"difficulty":"medium"');
   });
