@@ -54,6 +54,6 @@ Integration hardening: [failure handling, security, health, verification and ope
 AI usage: [token tracking, estimated pricing, attribution, aggregation and privacy](docs/ai-usage.md).
 ## Production deployment
 
-The persistent container deployment, secret templates, health checks, staging/release pipeline and operational runbook are documented in [Production operations](docs/production-operations.md). Production requires a configured host/domain, separate secrets, monitoring and verified off-host backups; local development is not a deployed environment.
+Use the [first hosted staging deployment runbook](docs/staging-deployment.md) for the staging-only Ubuntu checklist, templates, health checks, smoke journey, backup and restore drill. The broader persistent container deployment and release pipeline are documented in [Production operations](docs/production-operations.md). Production requires a configured host/domain, separate secrets, monitoring and verified off-host backups; local development is not a deployed environment.
 
 Closed beta access, privacy controls, event definitions and internal review: [Beta analytics runbook](docs/beta-analytics.md).
