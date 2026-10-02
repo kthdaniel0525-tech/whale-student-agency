@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { assessReleaseQuality, CORE_RELEASE_PROFILES } from "@/server/ai/evaluation/release-gate";
+import {
+  baselineProvenanceSchema,
+  createFirstReleaseBaseline,
+} from "@/server/ai/evaluation/baseline-bootstrap";
+import {
+  assessBaselineEligibility,
+  assessReleaseQuality,
+  CORE_RELEASE_PROFILES,
+} from "@/server/ai/evaluation/release-gate";
 import { QUALITY_PROFILES } from "@/server/ai/evaluation/profiles";
 import { runEvals, type EvalReport, type EvalRow } from "@/server/ai/evaluation/runner";
 import type { ProfileId } from "@/server/ai/evaluation/types";
@@ -22,14 +30,51 @@ function report(profiles: readonly ProfileId[] = CORE_RELEASE_PROFILES): EvalRep
   return { version: 1, mode: "FULL", createdAt: "2026-09-23T00:00:00Z", failedChecks: 0, rows };
 }
 describe("release quality evidence gate", () => {
+  const review = {
+    version: 1 as const,
+    reviewStatus: "reviewed" as const,
+    reviewedAt: "2026-10-02T20:00:00Z",
+    reviewer: "release-reviewer",
+    commitSha: "5c7880f0c31180a4b119e0ea51ab812fd02836e7",
+    immutableImage: "ghcr.io/example/project@sha256:8141a8e7aca147cfc1ea5a1ea680a141524ef1088cd413cffdd79ae19d8979aa",
+    environment: "staging" as const,
+  };
+
   it("accepts sufficiently paired complete observations without altering thresholds", () => {
-    expect(assessReleaseQuality(report(), report()).passed).toBe(true);
+    expect(assessReleaseQuality(report(), report())).toMatchObject({
+      status: "BASELINE_COMPARISON_PASS",
+      passed: true,
+    });
     expect(QUALITY_PROFILES["study-planner"].minimum).toBe(.99);
   });
   it("does not accept the real passing offline suite as generated quality evidence", async () => {
     const offline = await runEvals({ mode: "FULL" });
     expect(offline.failedChecks).toBe(0);
     expect(assessReleaseQuality(offline, offline).passed).toBe(false);
+  });
+  it("establishes an eligible first baseline without claiming a historical comparison", () => {
+    const input = report();
+    const result = createFirstReleaseBaseline(input, review);
+    expect(result.assessment).toMatchObject({
+      eligible: true,
+      status: "BASELINE_ESTABLISHED",
+    });
+    expect(result.report).toEqual(input);
+    expect(baselineProvenanceSchema.parse(result.provenance)).toMatchObject({
+      baselineStatus: "BASELINE_ESTABLISHED",
+      comparisonStatus: "NOT_PERFORMED_FIRST_RELEASE",
+      reviewStatus: "reviewed",
+      commitSha: review.commitSha,
+      immutableImage: review.immutableImage,
+    });
+  });
+  it("blocks baseline bootstrap when core reviewed evidence is incomplete", async () => {
+    const incomplete = report(["quiz", "workflow"]);
+    expect(assessBaselineEligibility(incomplete)).toMatchObject({
+      eligible: false,
+      status: "BASELINE_BOOTSTRAP_BLOCKED",
+    });
+    expect(assessBaselineEligibility(await runEvals({ mode: "FULL" })).eligible).toBe(false);
   });
   it.each(["evaluator-fixture", "missing-model", "missing-provider", "missing-judge", "missing-dimension", "unmeasured", "null-score"])("rejects %s despite a perfect aggregate", condition => {
     const candidate = report(), row = candidate.rows[0];
@@ -82,5 +127,56 @@ describe("release quality evidence gate", () => {
       const comparison = spawnSync(process.execPath, [...args, "scripts/run-evals.ts", "--mode", "FULL", "--baseline", baseline], { encoding: "utf8" });
       expect(comparison.status).toBe(1); expect(comparison.stdout).toContain("insufficient-data");
     } finally { await rm(folder, { recursive: true, force: true }); }
+  });
+  it("writes a first baseline and review sidecar only for a complete eligible report", async () => {
+    const folder = await mkdtemp(join(tmpdir(), "quality-bootstrap-"));
+    try {
+      const input = join(folder, "candidate.json");
+      const reviewPath = join(folder, "review.json");
+      const baseline = join(folder, "known-good.json");
+      const provenance = join(folder, "known-good.provenance.json");
+      await writeFile(input, JSON.stringify(report()));
+      await writeFile(reviewPath, JSON.stringify(review));
+      const command = spawnSync(process.execPath, [
+        "--conditions=react-server",
+        "--import",
+        "tsx",
+        "scripts/bootstrap-release-quality.ts",
+        "--report",
+        input,
+        "--review",
+        reviewPath,
+        "--out-baseline",
+        baseline,
+        "--out-provenance",
+        provenance,
+      ], { encoding: "utf8" });
+      expect(command.status).toBe(0);
+      expect(JSON.parse(command.stdout)).toMatchObject({
+        status: "BASELINE_ESTABLISHED",
+        comparisonStatus: "NOT_PERFORMED_FIRST_RELEASE",
+      });
+      expect(report()).toEqual(JSON.parse(await readFile(baseline, "utf8")));
+      expect(baselineProvenanceSchema.parse(
+        JSON.parse(await readFile(provenance, "utf8")),
+      ).reportSha256).toMatch(/^[0-9a-f]{64}$/);
+      const repeated = spawnSync(process.execPath, [
+        "--conditions=react-server",
+        "--import",
+        "tsx",
+        "scripts/bootstrap-release-quality.ts",
+        "--report",
+        input,
+        "--review",
+        reviewPath,
+        "--out-baseline",
+        baseline,
+        "--out-provenance",
+        provenance,
+      ], { encoding: "utf8" });
+      expect(repeated.status).toBe(1);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 });

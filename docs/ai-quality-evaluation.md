@@ -61,6 +61,36 @@ The release workflow invokes this check on the trusted staging runner before pro
 
 Add `--include-career` if Career will be enabled for any release cohort. The check requires FULL reports, all core profiles, existing minimum paired sample counts and thresholds, measured semantic dimensions, generator/provider/judge attribution, no unjudged executions and compatible baseline comparisons. It rejects offline evaluator fixtures, missing evidence, failed observations even with a misleading summary count, mismatched datasets/judges, and duplicate observations. No model routing policy or threshold changes are made.
 
+### First reviewed baseline
+
+The ordinary release check never compares a candidate with itself. Before the first known-good report exists, a trusted staging operator may run the separate bootstrap command once. It applies the same FULL-report, core-profile, minimum-sample, quality-floor, attribution and complete-judgment requirements as the baseline side of the release gate. It does not perform or claim a regression comparison.
+
+Prepare a review file outside the checkout with this metadata:
+
+```json
+{
+  "version": 1,
+  "reviewStatus": "reviewed",
+  "reviewedAt": "2026-10-02T20:00:00Z",
+  "reviewer": "REVIEWER_ID",
+  "commitSha": "FULL_GIT_SHA",
+  "immutableImage": "ghcr.io/OWNER/REPOSITORY@sha256:FULL_DIGEST",
+  "environment": "staging"
+}
+```
+
+Then write the first baseline and its provenance sidecar into an existing protected directory:
+
+```bash
+node --conditions=react-server --import tsx scripts/bootstrap-release-quality.ts \
+  --report /secure/quality/reviewed-first-release.json \
+  --review /secure/quality/review.json \
+  --out-baseline /etc/agency/quality/known-good.json \
+  --out-provenance /etc/agency/quality/known-good.provenance.json
+```
+
+The command refuses existing outputs and writes `known-good.json` only after its sidecar is installed. The baseline remains the exact strict `reportSchema` consumed by `check-release-quality.ts`. The sidecar binds its SHA-256 hash to the reviewed commit, immutable staging image, dataset versions, evaluator versions, judge and generator models, providers, profile sample counts and average scores. A successful bootstrap reports `BASELINE_ESTABLISHED` with `comparisonStatus: NOT_PERFORMED_FIRST_RELEASE`. Later candidates must still pass the ordinary paired baseline comparison, which reports `BASELINE_COMPARISON_PASS`; bootstrap success never reports that status.
+
 The current CLI dataset has sparse profiles and does not execute every live agent/workflow path. Use the existing `runEvals` execution-observation adapter with actual application execution plus the judge, and curate reviewed representative cases where coverage is below the existing five-sample minimum. Do not relabel static fixtures as generated observations. Baseline provenance, human review, target image/configuration binding and actual provider execution are operator responsibilities; a valid JSON file cannot prove them. Archive reviewed reports with the exact immutable release image and reviewer. This checker is a required release-review step, not automatic proof that live quality passed or a replacement for the broader launch checklist.
 
 ## Feedback and optional sampling
