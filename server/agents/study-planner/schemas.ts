@@ -92,8 +92,7 @@ const generatedSessionSchema = z
   })
   .strict();
 
-export const generatedStudyPlanSchema = z
-  .object({
+export const generatedStudyPlanWireSchema = z.object({
     title: z.string().trim().min(1).max(200),
     startDate: dateOnly,
     endDate: dateOnly,
@@ -111,8 +110,9 @@ export const generatedStudyPlanSchema = z
       )
       .min(1)
       .max(91),
-  })
-  .strict()
+  }).strict();
+
+export const generatedStudyPlanSchema = generatedStudyPlanWireSchema
   .superRefine((plan, context) => {
     if (plan.endDate < plan.startDate) {
       context.addIssue({ code: "custom", path: ["endDate"], message: "Invalid range." });
@@ -135,4 +135,28 @@ export const generatedStudyPlanSchema = z
     });
   });
 
+export type GeneratedStudyPlanWire = z.infer<typeof generatedStudyPlanWireSchema>;
 export type GeneratedStudyPlan = z.infer<typeof generatedStudyPlanSchema>;
+
+/** Model-authored arithmetic is redundant and error-prone. Session durations
+ * remain model output, while day/plan totals are deterministically derived
+ * before the full cross-field schema and planning constraints are applied. */
+export function normalizeGeneratedStudyPlan(
+  plan: GeneratedStudyPlanWire,
+): GeneratedStudyPlan {
+  const days = plan.days.map((day) => ({
+    ...day,
+    totalMinutes: day.sessions.reduce(
+      (sum, session) => sum + session.durationMinutes,
+      0,
+    ),
+  }));
+  return generatedStudyPlanSchema.parse({
+    ...plan,
+    days,
+    totalPlannedMinutes: days.reduce(
+      (sum, day) => sum + day.totalMinutes,
+      0,
+    ),
+  });
+}

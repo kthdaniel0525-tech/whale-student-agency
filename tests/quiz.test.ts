@@ -324,7 +324,7 @@ describe.sequential("Quiz Agent definition and generation", () => {
     try {
       const result = await boundary.service.generateQuiz(
         {
-          request: "Create two short-answer questions on mathematical induction",
+          request: "Create two short-answer exam questions covering mathematical induction",
           courseId,
         },
         owner.headers,

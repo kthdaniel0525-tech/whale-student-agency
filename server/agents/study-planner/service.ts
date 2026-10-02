@@ -18,12 +18,14 @@ import { STUDY_PLANNER_INSTRUCTIONS } from "./instructions";
 import { createPlanningBrief } from "./priority";
 import { calculatePlanningChanges } from "./replanning";
 import {
-  generatedStudyPlanSchema,
+  generatedStudyPlanWireSchema,
+  normalizeGeneratedStudyPlan,
   studyNowRequestSchema,
   studyPlanRequestSchema,
   studyPlanUpdateRequestSchema,
   studyTaskStatusSchema,
   type GeneratedStudyPlan,
+  type GeneratedStudyPlanWire,
 } from "./schemas";
 import type {
   CurrentPlanTask,
@@ -219,6 +221,16 @@ function validateGeneratedPlan(plan: GeneratedStudyPlan, brief: PlanningBrief): 
   }
 }
 
+function validatedGeneratedPlan(
+  plan: GeneratedStudyPlanWire,
+): GeneratedStudyPlan {
+  try {
+    return normalizeGeneratedStudyPlan(plan);
+  } catch {
+    throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
+  }
+}
+
 function materializedTasks(plan: GeneratedStudyPlan, brief: PlanningBrief) {
   const signals = new Map(brief.signals.map((signal) => [signal.id, signal]));
   return placeStudyTasks(plan.days.flatMap((day) =>
@@ -390,7 +402,7 @@ export class StudyPlannerAgentService {
       headers,
       {
         schemaName: "study_plan",
-        schema: generatedStudyPlanSchema,
+        schema: generatedStudyPlanWireSchema,
         maxOutputTokens: 4096,
         contextOverrides: { availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
@@ -405,8 +417,8 @@ export class StudyPlannerAgentService {
     if (!brief || !execution.structuredData) {
       throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
     }
-    validateGeneratedPlan(execution.structuredData, brief);
-    const generated = execution.structuredData;
+    const generated = validatedGeneratedPlan(execution.structuredData);
+    validateGeneratedPlan(generated, brief);
     const validatedBrief = brief;
     const tasks = await prepareScheduledTasks(userId, materializedTasks(generated, validatedBrief), validatedBrief);
     try {
@@ -472,7 +484,7 @@ export class StudyPlannerAgentService {
       headers,
       {
         schemaName: "study_plan_update",
-        schema: generatedStudyPlanSchema,
+        schema: generatedStudyPlanWireSchema,
         maxOutputTokens: 4096,
         contextOverrides: { availabilityExcludePlanId: parsed.data.planId, availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
@@ -512,7 +524,7 @@ export class StudyPlannerAgentService {
       throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
     }
     const validatedBrief = brief;
-    const generated = execution.structuredData;
+    const generated = validatedGeneratedPlan(execution.structuredData);
     validateGeneratedPlan(generated, validatedBrief);
     const tasks = await prepareScheduledTasks(userId, materializedTasks(generated, validatedBrief), validatedBrief, existing.id);
     try {
@@ -599,7 +611,7 @@ export class StudyPlannerAgentService {
       headers,
       {
         schemaName: "study_now",
-        schema: generatedStudyPlanSchema,
+        schema: generatedStudyPlanWireSchema,
         maxOutputTokens: 1536,
         contextOverrides: { availabilityWindow: planningCalendarWindow(parsed.data), ...(planningDocumentsRequested(parsed.data.request, parsed.data.documentIds) ? { documents: true, limits: { documents: 5 } } : {}) },
         buildDirective(context, personalization, adaptiveStrategy) {
@@ -624,9 +636,10 @@ export class StudyPlannerAgentService {
     if (!brief || !execution.structuredData) {
       throw new StudyPlannerAgentError("INVALID_PLAN_RESPONSE");
     }
-    validateGeneratedPlan(execution.structuredData, brief);
+    const generated = validatedGeneratedPlan(execution.structuredData);
+    validateGeneratedPlan(generated, brief);
     const signals = new Map(brief.signals.map((signal) => [signal.id, signal]));
-    const sessions = execution.structuredData.days[0].sessions.map((session) => {
+    const sessions = generated.days[0].sessions.map((session) => {
       const signal = signals.get(session.signalId) as PlanningSignal;
       return {
         date: brief!.startDate,
@@ -645,8 +658,8 @@ export class StudyPlannerAgentService {
     });
     return {
       date: brief.startDate,
-      summary: execution.structuredData.summary,
-      totalMinutes: execution.structuredData.totalPlannedMinutes,
+      summary: generated.summary,
+      totalMinutes: generated.totalPlannedMinutes,
       sessions,
       assumptions: brief.assumptions,
     };

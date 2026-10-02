@@ -635,6 +635,35 @@ describe.sequential("Study Planner generation and persistence", () => {
     expect(boundary.briefs[0].totalAvailableMinutes).toBe(270);
   });
 
+  it("derives redundant plan totals in code and states cross-field constraints", async () => {
+    const boundary = setupBoundary();
+    boundary.setTransform((plan) => ({
+      ...plan,
+      totalPlannedMinutes: plan.totalPlannedMinutes + 15,
+      days: plan.days.map((item) => ({
+        ...item,
+        totalMinutes: item.totalMinutes + 15,
+      })),
+    }));
+    const plan = await boundary.service.createPlan(
+      {
+        request: "Plan my exam review",
+        courseId: mathCourseId,
+        startDate: today(),
+        endDate: today(),
+        availability: [{ date: today(), availableMinutes: 90 }],
+      },
+      owner.headers,
+    );
+    expect(plan.totalPlannedMinutes).toBe(45);
+    expect(plan.days[0].totalMinutes).toBe(45);
+    const request = boundary.structured.mock.calls.find(
+      ([input]) => input.schemaName === "study_plan",
+    )![0];
+    expect(request.messages[0].content).toContain("allowedActivities");
+    expect(request.messages[0].content).toContain("plan total equal all day totals");
+  });
+
   it("rejects structured output that exceeds a day's availability before storage", async () => {
     const boundary = setupBoundary();
     boundary.setTransform((plan) => ({

@@ -52,7 +52,7 @@ export function selectQuizSettings(
     nineteen: 19, twenty: 20,
   };
   const countMatch = lower.match(
-    /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)[ -]+(?:practice[ -]+)?(?:(?:multiple[ -]+choice|true[ /-]+false|short[ -]+answer|long[ -]+answer|mixed)[ -]+)?questions?\b/,
+    /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)[ -]+(?:practice[ -]+)?(?:(?:multiple[ -]+choice|true[ /-]+false|short[ -]+answer|long[ -]+answer|mixed)[ -]+)?(?:exam[ -]+)?questions?\b/,
   );
   const inferredCount = countMatch
     ? Number.isFinite(Number(countMatch[1]))
