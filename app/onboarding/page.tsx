@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { requirePageUser } from "@/server/auth/session";
 import { ProfileForm } from "@/features/student/components/profile-form";
+import { LegalLinks } from "@/features/legal/legal-links";
 export const dynamic = "force-dynamic";
 export default async function Onboarding() {
   const { user, profile } = await requirePageUser(false);
@@ -27,6 +28,7 @@ export default async function Onboarding() {
           }}
         />
       </section>
+      <LegalLinks className="mt-8 justify-center text-muted-foreground" />
     </main>
   );
 }

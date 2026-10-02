@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { NotificationBell } from "../notifications/bell";
+import { LegalLinks } from "@/features/legal/legal-links";
 const links = [
   ["Dashboard", "/student", LayoutDashboard],
   ["AI Assistant", "/student/assistant", MessagesSquare],
@@ -122,6 +123,7 @@ export function Shell({
         </SidebarContent>
         <SidebarFooter className="p-5 border-t">
           <Link href="/student/feedback" className="text-sm underline">Feedback &amp; privacy</Link>
+          <LegalLinks className="text-muted-foreground" />
           <div className="text-sm font-medium truncate text-foreground">
             {name}
           </div>

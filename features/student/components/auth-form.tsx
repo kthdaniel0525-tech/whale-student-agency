@@ -5,6 +5,7 @@ import { GraduationCap, ArrowRight } from "lucide-react";
 import { createAuthClient } from "better-auth/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "./field";
+import { LegalLinks } from "@/features/legal/legal-links";
 import { credentialsSchema } from "@/features/student/validation/schemas";
 const client = createAuthClient();
 export function AuthForm({ signup = false }: { signup?: boolean }) {
@@ -105,6 +106,7 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
             {signup ? "Sign in" : "Create an account"}
           </Link>
         </p>
+        <LegalLinks className="mt-6 border-t pt-5 text-muted-foreground" />
       </div>
     </main>
   );
