@@ -82,7 +82,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.5",
+    "eslint-config-next": "16.3.8",
     "prisma": "7.10.0",
     "tailwindcss": "4.2.1",
     "tsx": "4.23.13",
@@ -97,6 +97,13 @@
     },
     "@esbuild-kit/core-utils": {
       "esbuild": "0.25.12"
+    },
+    "@next/eslint-plugin-next@16.3.8": {
+      "fast-glob": {
+        "micromatch": {
+          "braces": "npm:brace-expansion@2.1.7"
+        }
+      }
     },
     "prisma": {
       "mysql2": "3.24.4"
