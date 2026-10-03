@@ -7,6 +7,8 @@ import PrivacyPage from "@/app/privacy/page";
 import TermsPage from "@/app/terms/page";
 import SupportPage from "@/app/support/page";
 import { LegalLinks } from "@/features/legal/legal-links";
+import { LEGAL_CONTENT_REVIEW_STATUS } from "@/lib/legal/status";
+import { publicSupportContact } from "@/server/legal/support";
 import { auth } from "@/server/auth/config";
 import { db } from "@/server/db/client";
 import { createConversation } from "@/server/conversations";
@@ -31,29 +33,62 @@ function request(path: string, method: string, headers?: Headers, body?: unknown
   return new Request(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
-beforeAll(() => { vi.stubEnv("SUPPORT_CONTACT_LABEL", ""); vi.stubEnv("SUPPORT_CONTACT_URL", ""); });
 afterEach(() => { vi.unstubAllEnvs(); });
 afterAll(async () => { await db().user.deleteMany({ where: { id: { in: users } } }); await db().$disconnect(); });
 
 describe("public legal and support surfaces", () => {
-  it("renders factual Privacy and Terms content with discoverable legal navigation", () => {
+  it("renders polished public Privacy, Terms, and Support content with discoverable navigation", () => {
     const privacy = renderToStaticMarkup(createElement(PrivacyPage));
     const terms = renderToStaticMarkup(createElement(TermsPage));
+    const support = renderToStaticMarkup(createElement(SupportPage));
     const links = renderToStaticMarkup(createElement(LegalLinks));
-    expect(privacy).toContain("How Student Agency handles data");
-    expect(privacy).toContain("Final policy wording still requires external legal review");
-    expect(terms).toContain("Using Student Agency");
-    expect(terms).toContain("AI-generated responses can be inaccurate");
+    expect(privacy).toContain("Account and profile information");
+    expect(privacy).toContain("AI processing");
+    expect(privacy).toContain("Kim WooJin");
+    expect(privacy).toContain("Republic of Korea");
+    expect(privacy).toContain("OpenAI");
+    expect(privacy).toContain("DigitalOcean");
+    expect(privacy).toContain("AI-generated output may be incomplete or inaccurate");
+    expect(terms).toContain("Acceptable use");
+    expect(terms).toContain("Academic integrity");
+    expect(terms).toContain("AI-generated responses may be incomplete, outdated, or inaccurate");
+    expect(support).toContain("Contact support");
+    expect(support).toContain("kth.daniel0525@gmail.com");
+    expect(support).toContain("mailto:kth.daniel0525@gmail.com");
+    for (const markup of [privacy, terms, support]) {
+      expect(markup).not.toContain("external legal review");
+      expect(markup).not.toContain("engineering summary");
+      expect(markup).not.toContain("RC approval blocker");
+    }
+    expect(LEGAL_CONTENT_REVIEW_STATUS).toBe("EXTERNAL_LEGAL_REVIEW_REQUIRED");
     for (const href of ["/privacy", "/terms", "/support"]) expect(links).toContain(`href="${href}"`);
   });
 
-  it("fails closed without a configured support destination and publishes only valid HTTPS configuration", () => {
-    expect(renderToStaticMarkup(createElement(SupportPage))).toContain("No public support contact has been configured");
+  it("fails closed when the optional support destination is not configured", () => {
+    vi.stubEnv("SUPPORT_CONTACT_LABEL", "");
+    vi.stubEnv("SUPPORT_CONTACT_URL", "");
+    expect(publicSupportContact()).toEqual({ available: false, reason: "not-configured" });
+    const support = renderToStaticMarkup(createElement(SupportPage));
+    expect(support).toContain("kth.daniel0525@gmail.com");
+    expect(support).not.toContain("Additional support resource");
+  });
+
+  it("rejects unsafe optional support URLs and publishes a complete HTTPS configuration", () => {
     vi.stubEnv("SUPPORT_CONTACT_LABEL", "Approved help center");
     vi.stubEnv("SUPPORT_CONTACT_URL", "javascript:alert(1)");
-    expect(renderToStaticMarkup(createElement(SupportPage))).not.toContain("javascript:");
+    expect(publicSupportContact()).toEqual({ available: false, reason: "invalid-configuration" });
+    const invalid = renderToStaticMarkup(createElement(SupportPage));
+    expect(invalid).toContain("kth.daniel0525@gmail.com");
+    expect(invalid).not.toContain("javascript:");
+    expect(invalid).not.toContain("Additional support resource");
     vi.stubEnv("SUPPORT_CONTACT_URL", "https://support.example.test/student-agency");
+    expect(publicSupportContact()).toEqual({
+      available: true,
+      label: "Approved help center",
+      url: "https://support.example.test/student-agency",
+    });
     const configured = renderToStaticMarkup(createElement(SupportPage));
+    expect(configured).toContain("kth.daniel0525@gmail.com");
     expect(configured).toContain("Approved help center");
     expect(configured).toContain("https://support.example.test/student-agency");
   });
